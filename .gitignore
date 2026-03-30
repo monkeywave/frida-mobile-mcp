@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts
+!src/**/*.d.ts
+.env
+.env.*
+*.log
+audit.jsonl
+script_archive/
+.DS_Store
+coverage/
+.vitest/
+package-lock.json
