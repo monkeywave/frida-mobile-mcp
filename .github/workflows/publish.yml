@@ -19,6 +19,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
 
@@ -27,3 +28,5 @@ jobs:
       - run: npm test
 
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
