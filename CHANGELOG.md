@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.1...v0.2.2) (2026-04-03)
+
+
+### Bug Fixes
+
+* changed to Trusted Publishing ([4efc560](https://github.com/monkeywave/frida-mobile-mcp/commit/4efc5607e236b39bffe7b92fa95cbb25b7b42a2a))
+
 ## [0.2.1](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.0...v0.2.1) (2026-04-03)
 
 
