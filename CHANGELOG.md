@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.0...v0.2.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* update CI pipeline and commit lock file ([7be4d80](https://github.com/monkeywave/frida-mobile-mcp/commit/7be4d8084ca795e7ceae2106200908abea357730))
+
 ## [0.2.0]
 
 ### Features
