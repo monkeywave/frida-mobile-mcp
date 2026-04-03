@@ -8,17 +8,28 @@ import { wrapFridaError } from '../helpers/errors.js';
 import { validateProcessTarget } from '../helpers/sanitize.js';
 import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerExploreTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'explore_app',
-    'Launch a mobile app and gather comprehensive initial context including loaded classes, modules, and libraries. This is the recommended starting point for any app analysis. The app will be spawned in suspended mode, instrumented, then resumed. Returns: pid, platform, loaded modules, and filtered class list.',
     {
-      target: z.string().describe('App bundle ID (e.g., "com.example.app") or process name'),
-      device: z.string().optional().describe('Device ID. Auto-selects USB device if not specified.'),
-      class_filter: z.string().optional().describe('Regex filter for class enumeration (e.g., "com\\.example\\..*"). Defaults to app package pattern.'),
+      title: 'Explore Mobile App',
+      description: 'Launch a mobile app and gather comprehensive initial context including loaded classes, modules, and libraries. This is the recommended starting point for any app analysis. The app will be spawned in suspended mode, instrumented, then resumed. Returns: pid, platform, loaded modules, and filtered class list.',
+      inputSchema: {
+        target: z.string().describe('App bundle ID (e.g., "com.example.app") or process name'),
+        device: z.string().optional().describe('Device ID. Auto-selects USB device if not specified.'),
+        class_filter: z.string().optional().describe('Regex filter for class enumeration (e.g., "com\\.example\\..*"). Defaults to app package pattern.'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ target, device, class_filter }) => {
+    async ({ target, device, class_filter, response_format }) => {
       const startTime = Date.now();
       try {
         validateProcessTarget(target);
@@ -104,7 +115,8 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
               { tool: 'bypass_ssl_pinning', args: { target }, reason: 'Bypass SSL pinning for network analysis' },
               { tool: 'mobile_action', args: { action: 'mobile_take_screenshot' }, reason: 'Take a screenshot to see the app state' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
         const wrapped = wrapFridaError(err);
@@ -115,7 +127,7 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
           status: 'error',
           durationMs: Date.now() - startTime,
         });
-        return formatToolResponse(wrapped.toErrorResponse());
+        return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }
   );

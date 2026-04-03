@@ -16,6 +16,7 @@ import { registerSslTool } from './tools/ssl.js';
 import { registerMessagesTool } from './tools/messages.js';
 import { registerCleanupTool } from './tools/cleanup.js';
 import { registerMobileTool } from './tools/mobile.js';
+import { registerDetectTool } from './tools/detect.js';
 import { registerAdvancedDeviceTools } from './tools/advanced/device.js';
 import { registerAdvancedProcessTools } from './tools/advanced/process.js';
 import { registerAdvancedSessionTools } from './tools/advanced/session.js';
@@ -70,6 +71,7 @@ export function createServer(configOverrides?: Partial<FridaMcpConfig>): McpServ
   registerMessagesTool(server);
   registerCleanupTool(server);
   registerMobileTool(server);
+  registerDetectTool(server, deviceManager);
 
   // Register Tier 2 advanced tools
   registerAdvancedDeviceTools(server, deviceManager);

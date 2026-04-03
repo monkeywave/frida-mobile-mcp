@@ -6,17 +6,28 @@ import { FridaMcpError, MemoryWriteDisabledError, wrapFridaError } from '../help
 import { validateMemoryAddress } from '../helpers/sanitize.js';
 import { audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerMemoryTools(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'read_memory',
-    'Read raw memory from a target process. Requires an active session. Address as hex string (e.g., "0x7fff12345678"). Max 4MB per read. Returns hex-encoded bytes.',
     {
-      session_id: z.string().describe('Session ID'),
-      address: z.string().describe('Memory address as hex string (e.g., "0x12345678")'),
-      size: z.number().describe('Number of bytes to read'),
+      title: 'Read Process Memory',
+      description: 'Read raw memory from a target process. Requires an active session. Address as hex string (e.g., "0x7fff12345678"). Max 4MB per read. Returns hex-encoded bytes.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID'),
+        address: z.string().describe('Memory address as hex string (e.g., "0x12345678")'),
+        size: z.number().describe('Number of bytes to read'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id, address, size }) => {
+    async ({ session_id, address, size, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -60,24 +71,35 @@ export function registerMemoryTools(server: McpServer): void {
               { tool: 'read_memory', args: { session_id, address: `0x${(BigInt(address) + BigInt(size)).toString(16)}`, size }, reason: 'Read next chunk' },
               { tool: 'scan_memory', reason: 'Search for patterns in memory' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
-        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse());
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse(), response_format);
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'write_memory',
-    'Write raw bytes to process memory. DISABLED by default for safety - enable via config (memoryWriteEnabled: true). Provide hex-encoded data.',
     {
-      session_id: z.string().describe('Session ID'),
-      address: z.string().describe('Memory address as hex string'),
-      data: z.string().describe('Hex-encoded bytes to write (e.g., "90909090")'),
+      title: 'Write Process Memory',
+      description: 'Write raw bytes to process memory. DISABLED by default for safety - enable via config (memoryWriteEnabled: true). Provide hex-encoded data.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID'),
+        address: z.string().describe('Memory address as hex string'),
+        data: z.string().describe('Hex-encoded bytes to write (e.g., "90909090")'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id, address, data }) => {
+    async ({ session_id, address, data, response_format }) => {
       try {
         const state = getState();
         if (!state.config.memoryWriteEnabled) {
@@ -125,24 +147,35 @@ export function registerMemoryTools(server: McpServer): void {
             [
               { tool: 'read_memory', args: { session_id, address, size: bytes.length }, reason: 'Verify the write' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
-        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse());
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse(), response_format);
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'scan_memory',
-    'Scan process memory for a byte pattern. Pattern format: "48 89 5c 24 ?? 57" where ?? is a wildcard. Optionally limit scan to a specific module.',
     {
-      session_id: z.string().describe('Session ID'),
-      pattern: z.string().describe('Byte pattern with ?? wildcards (e.g., "48 89 5c 24 ?? 57")'),
-      module: z.string().optional().describe('Module name to limit scan scope (e.g., "libssl.so")'),
+      title: 'Scan Process Memory',
+      description: 'Scan process memory for a byte pattern. Pattern format: "48 89 5c 24 ?? 57" where ?? is a wildcard. Optionally limit scan to a specific module.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID'),
+        pattern: z.string().describe('Byte pattern with ?? wildcards (e.g., "48 89 5c 24 ?? 57")'),
+        module: z.string().optional().describe('Module name to limit scan scope (e.g., "libssl.so")'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id, pattern, module: moduleName }) => {
+    async ({ session_id, pattern, module: moduleName, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -196,11 +229,12 @@ export function registerMemoryTools(server: McpServer): void {
             results.length > 0
               ? [{ tool: 'read_memory', args: { session_id, address: results[0].address, size: 64 }, reason: 'Read memory at first match' }]
               : []
-          )
+          ),
+          response_format
         );
       } catch (err) {
-        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse());
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse(), response_format);
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

@@ -3,18 +3,29 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
+import { responseFormatSchema } from '../constants.js';
 import { log, audit } from '../helpers/logger.js';
 
 export function registerCleanupTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'stop_instrumentation',
-    'Clean up all hooks, scripts, and traces on a target. The "undo everything" tool. Detaches the Frida session and frees all resources. Use when you are done analyzing an app or want to start fresh.',
     {
-      session_id: z.string().optional().describe('Specific session to clean up'),
-      target: z.string().optional().describe('Clean up by app target name/bundle ID'),
-      all: z.boolean().optional().default(false).describe('Clean up ALL sessions (default: false)'),
+      title: 'Stop Instrumentation',
+      description: 'Clean up all hooks, scripts, and traces on a target. The "undo everything" tool. Detaches the Frida session and frees all resources. Use when you are done analyzing an app or want to start fresh.',
+      inputSchema: {
+        session_id: z.string().optional().describe('Specific session to clean up'),
+        target: z.string().optional().describe('Clean up by app target name/bundle ID'),
+        all: z.boolean().optional().default(false).describe('Clean up ALL sessions (default: false)'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id, target, all }) => {
+    async ({ session_id, target, all, response_format }) => {
       try {
         const state = getState();
         const cleaned: string[] = [];
@@ -72,13 +83,14 @@ export function registerCleanupTool(server: McpServer): void {
               { tool: 'get_status', reason: 'Verify cleanup' },
               { tool: 'explore_app', reason: 'Start fresh with a new app' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
         if (err instanceof FridaMcpError) {
-          return formatToolResponse(err.toErrorResponse());
+          return formatToolResponse(err.toErrorResponse(), response_format);
         }
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

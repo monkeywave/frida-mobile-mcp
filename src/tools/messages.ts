@@ -3,18 +3,29 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError } from '../helpers/errors.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerMessagesTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'get_messages',
-    'Retrieve buffered messages from active scripts and hooks. Messages include hook invocations, trace hits, script output (send() calls), and errors. Use "since" for pagination to get only new messages.',
     {
-      session_id: z.string().describe('Session ID to get messages from'),
-      script_id: z.string().optional().describe('Filter to a specific script'),
-      since: z.number().optional().describe('Message index to start from (for pagination)'),
-      limit: z.number().optional().default(50).describe('Max messages to return (default: 50)'),
+      title: 'Get Script Messages',
+      description: 'Retrieve buffered messages from active scripts and hooks. Messages include hook invocations, trace hits, script output (send() calls), and errors. Use "since" for pagination to get only new messages.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID to get messages from'),
+        script_id: z.string().optional().describe('Filter to a specific script'),
+        since: z.number().optional().describe('Message index to start from (for pagination)'),
+        limit: z.number().optional().default(50).describe('Max messages to return (default: 50)'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
-    async ({ session_id, script_id, since, limit }) => {
+    async ({ session_id, script_id, since, limit, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -78,11 +89,12 @@ export function registerMessagesTool(server: McpServer): void {
               { tool: 'hook_method', reason: 'Add more hooks to capture more data' },
               { tool: 'stop_instrumentation', args: { session_id }, reason: 'Clean up when done' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
         if (err instanceof FridaMcpError) {
-          return formatToolResponse(err.toErrorResponse());
+          return formatToolResponse(err.toErrorResponse(), response_format);
         }
         throw err;
       }

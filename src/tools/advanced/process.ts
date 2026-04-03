@@ -4,15 +4,26 @@ import type { DeviceManager } from '../../device/manager.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
 import { wrapFridaError } from '../../helpers/errors.js';
+import { responseFormatSchema } from '../../constants.js';
 
 export function registerAdvancedProcessTools(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'list_processes',
-    'List running processes on the target device. Equivalent to frida-ps CLI command.',
     {
-      device_id: z.string().optional().describe('Device ID'),
+      title: 'List Processes',
+      description: 'List running processes on the target device. Equivalent to frida-ps CLI command.',
+      inputSchema: {
+        device_id: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ device_id }) => {
+    async ({ device_id, response_format }) => {
       try {
         const state = getState();
         const device = device_id
@@ -31,20 +42,30 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
         }, [
           { tool: 'attach_process', reason: 'Attach to a specific process' },
           { tool: 'list_applications', reason: 'List installed applications instead' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'list_applications',
-    'List installed and running applications on the target device.',
     {
-      device_id: z.string().optional().describe('Device ID'),
+      title: 'List Applications',
+      description: 'List installed and running applications on the target device.',
+      inputSchema: {
+        device_id: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ device_id }) => {
+    async ({ device_id, response_format }) => {
       try {
         const state = getState();
         const device = device_id
@@ -65,20 +86,30 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
           applications: appList,
         }, [
           { tool: 'explore_app', reason: 'Explore a specific app' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'get_frontmost_application',
-    'Get the currently foreground application on the device.',
     {
-      device_id: z.string().optional().describe('Device ID'),
+      title: 'Get Frontmost Application',
+      description: 'Get the currently foreground application on the device.',
+      inputSchema: {
+        device_id: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ device_id }) => {
+    async ({ device_id, response_format }) => {
       try {
         const state = getState();
         const device = device_id
@@ -88,7 +119,7 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
 
         const app = await device.getFrontmostApplication();
         if (!app) {
-          return formatToolResponse(buildResult({ frontmost_app: null, message: 'No foreground app detected.' }, []));
+          return formatToolResponse(buildResult({ frontmost_app: null, message: 'No foreground app detected.' }, []), response_format);
         }
 
         return formatToolResponse(buildResult({
@@ -96,9 +127,9 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
         }, [
           { tool: 'explore_app', args: { target: app.identifier }, reason: 'Explore this app' },
           { tool: 'hook_method', args: { target: app.identifier }, reason: 'Hook methods in this app' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

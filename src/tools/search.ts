@@ -6,20 +6,31 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { validateProcessTarget } from '../helpers/sanitize.js';
 import { log } from '../helpers/logger.js';
+import { responseFormatSchema } from '../constants.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 
 export function registerSearchTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'search_classes_and_methods',
-    'Search for classes and their methods by pattern in a running app. Combines class enumeration and method listing. Use regex patterns like "Login", "com\\.example\\.auth.*", or "NSURLSession". Returns matching classes with their methods when include_methods is true.',
     {
-      target: z.string().describe('App bundle ID, process name, or PID'),
-      pattern: z.string().describe('Regex pattern to match class names'),
-      device: z.string().optional().describe('Device ID'),
-      include_methods: z.boolean().optional().default(false).describe('Also enumerate methods of matched classes (default: false)'),
-      limit: z.number().optional().default(50).describe('Max classes to return (default: 50)'),
+      title: 'Search Classes and Methods',
+      description: 'Search for classes and their methods by pattern in a running app. Combines class enumeration and method listing. Use regex patterns like "Login", "com\\.example\\.auth.*", or "NSURLSession". Returns matching classes with their methods when include_methods is true.',
+      inputSchema: {
+        target: z.string().describe('App bundle ID, process name, or PID'),
+        pattern: z.string().describe('Regex pattern to match class names'),
+        device: z.string().optional().describe('Device ID'),
+        include_methods: z.boolean().optional().default(false).describe('Also enumerate methods of matched classes (default: false)'),
+        limit: z.number().optional().default(50).describe('Max classes to return (default: 50)'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ target, pattern, device, include_methods, limit }) => {
+    async ({ target, pattern, device, include_methods, limit, response_format }) => {
       try {
         validateProcessTarget(target);
         const state = getState();
@@ -124,10 +135,11 @@ export function registerSearchTool(server: McpServer, deviceManager: DeviceManag
                 : []),
               { tool: 'search_classes_and_methods', args: { target, pattern, include_methods: true }, reason: 'Search again with methods included' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

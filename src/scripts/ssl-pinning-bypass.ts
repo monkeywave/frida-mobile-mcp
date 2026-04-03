@@ -43,7 +43,7 @@ export const sslPinningBypassTemplate: ScriptTemplate = {
           try {
             var SSLContext = Java.use('javax.net.ssl.SSLContext');
             SSLContext.init.overload('[Ljavax.net.ssl.KeyManager;', '[Ljavax.net.ssl.TrustManager;', 'java.security.SecureRandom').implementation = function(km, tm, sr) {
-              this.init(km, tm, sr);
+              this.init(km, [TrustManager.$new()], sr);
               send({ status: 'bypassed', method: 'SSLContext.init', platform: 'android' });
             };
           } catch(e) { send({ status: 'skipped', method: 'SSLContext.init', reason: e.message }); }
@@ -64,6 +64,35 @@ export const sslPinningBypassTemplate: ScriptTemplate = {
             };
           } catch(e) { send({ status: 'skipped', method: 'Conscrypt', reason: e.message }); }
 
+          // OkHttp4 CertificatePinner (Kotlin rewrite)
+          try {
+            var CertPinner = Java.use('okhttp3.CertificatePinner');
+            if (CertPinner['check$okhttp']) {
+              CertPinner['check$okhttp'].implementation = function() {
+                send({ status: 'bypassed', method: 'OkHttp4.check$okhttp', platform: 'android' });
+              };
+            }
+          } catch(e) { send({ status: 'skipped', method: 'OkHttp4', reason: e.message }); }
+
+          // WebViewClient SSL error bypass
+          try {
+            var WebViewClient = Java.use('android.webkit.WebViewClient');
+            WebViewClient.onReceivedSslError.implementation = function(view, handler, error) {
+              handler.proceed();
+              send({ status: 'bypassed', method: 'WebViewClient.onReceivedSslError', platform: 'android' });
+            };
+          } catch(e) { send({ status: 'skipped', method: 'WebViewClient', reason: e.message }); }
+
+          // NetworkSecurityTrustManager (Android 7+)
+          try {
+            var NSTM = Java.use('android.security.net.config.NetworkSecurityTrustManager');
+            NSTM.checkServerTrusted.overloads.forEach(function(overload) {
+              overload.implementation = function() {
+                send({ status: 'bypassed', method: 'NetworkSecurityTrustManager', platform: 'android' });
+              };
+            });
+          } catch(e) { send({ status: 'skipped', method: 'NetworkSecurityTrustManager', reason: e.message }); }
+
           send({ status: 'complete', platform: 'android' });
         });
       }
@@ -75,9 +104,16 @@ export const sslPinningBypassTemplate: ScriptTemplate = {
           var SecTrustEvaluate = Module.findExportByName('Security', 'SecTrustEvaluate');
           if (SecTrustEvaluate) {
             Interceptor.replace(SecTrustEvaluate, new NativeCallback(function(trust, result) {
-              Memory.writeU32(result, 4); // kSecTrustResultProceed
-              send({ status: 'bypassed', method: 'SecTrustEvaluate', platform: 'ios' });
-              return 0; // errSecSuccess
+              try {
+                if (!result.isNull()) {
+                  Memory.writeU32(result, 4); // kSecTrustResultProceed
+                }
+                send({ status: 'bypassed', method: 'SecTrustEvaluate', platform: 'ios' });
+                return 0; // errSecSuccess
+              } catch(e) {
+                send({ status: 'error', method: 'SecTrustEvaluate', reason: e.message });
+                return 0;
+              }
             }, 'int', ['pointer', 'pointer']));
           }
         } catch(e) { send({ status: 'skipped', method: 'SecTrustEvaluate', reason: e.message }); }
@@ -87,8 +123,13 @@ export const sslPinningBypassTemplate: ScriptTemplate = {
           var SecTrustEvaluateWithError = Module.findExportByName('Security', 'SecTrustEvaluateWithError');
           if (SecTrustEvaluateWithError) {
             Interceptor.replace(SecTrustEvaluateWithError, new NativeCallback(function(trust, error) {
-              send({ status: 'bypassed', method: 'SecTrustEvaluateWithError', platform: 'ios' });
-              return 1; // true = trusted
+              try {
+                send({ status: 'bypassed', method: 'SecTrustEvaluateWithError', platform: 'ios' });
+                return 1; // true = trusted
+              } catch(e) {
+                send({ status: 'error', method: 'SecTrustEvaluateWithError', reason: e.message });
+                return 1;
+              }
             }, 'bool', ['pointer', 'pointer']));
           }
         } catch(e) { send({ status: 'skipped', method: 'SecTrustEvaluateWithError', reason: e.message }); }
@@ -97,11 +138,46 @@ export const sslPinningBypassTemplate: ScriptTemplate = {
         try {
           var SSL_CTX_set_custom_verify = Module.findExportByName('libboringssl.dylib', 'SSL_CTX_set_custom_verify');
           if (SSL_CTX_set_custom_verify) {
+            var original_set_custom_verify = new NativeFunction(SSL_CTX_set_custom_verify, 'void', ['pointer', 'int', 'pointer']);
+            var permissive_verify_cb = new NativeCallback(function(ssl, out_alert) {
+              return 0; // ssl_verify_ok
+            }, 'int', ['pointer', 'pointer']);
             Interceptor.replace(SSL_CTX_set_custom_verify, new NativeCallback(function(ctx, mode, cb) {
-              send({ status: 'bypassed', method: 'BoringSSL.SSL_CTX_set_custom_verify', platform: 'ios' });
+              try {
+                original_set_custom_verify(ctx, mode, permissive_verify_cb);
+                send({ status: 'bypassed', method: 'BoringSSL.SSL_CTX_set_custom_verify', platform: 'ios' });
+              } catch(e) {
+                send({ status: 'error', method: 'BoringSSL.SSL_CTX_set_custom_verify', reason: e.message });
+              }
             }, 'void', ['pointer', 'int', 'pointer']));
           }
         } catch(e) { send({ status: 'skipped', method: 'BoringSSL', reason: e.message }); }
+
+        // BoringSSL SSL_set_custom_verify (per-connection)
+        try {
+          var SSL_set_custom_verify = Module.findExportByName('libboringssl.dylib', 'SSL_set_custom_verify');
+          if (SSL_set_custom_verify) {
+            var origSetVerify = new NativeFunction(SSL_set_custom_verify, 'void', ['pointer', 'int', 'pointer']);
+            var verifyOk = new NativeCallback(function(ssl, out_alert) { return 0; }, 'int', ['pointer', 'pointer']);
+            Interceptor.replace(SSL_set_custom_verify, new NativeCallback(function(ssl, mode, cb) {
+              try { origSetVerify(ssl, mode, verifyOk); } catch(e) {}
+              send({ status: 'bypassed', method: 'BoringSSL.SSL_set_custom_verify', platform: 'ios' });
+            }, 'void', ['pointer', 'int', 'pointer']));
+          }
+        } catch(e) { send({ status: 'skipped', method: 'BoringSSL.SSL_set_custom_verify', reason: e.message }); }
+
+        // AFNetworking AFSecurityPolicy
+        try {
+          if (ObjC.classes.AFSecurityPolicy) {
+            var AFPolicy = ObjC.classes.AFSecurityPolicy;
+            Interceptor.attach(AFPolicy['- evaluateServerTrust:forDomain:'].implementation, {
+              onLeave: function(retval) {
+                retval.replace(ptr(1));
+                send({ status: 'bypassed', method: 'AFSecurityPolicy.evaluateServerTrust', platform: 'ios' });
+              }
+            });
+          }
+        } catch(e) { send({ status: 'skipped', method: 'AFNetworking', reason: e.message }); }
 
         send({ status: 'complete', platform: 'ios' });
       }

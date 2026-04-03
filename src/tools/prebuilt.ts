@@ -9,18 +9,29 @@ import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'run_prebuilt_script',
-    'Run a pre-built Frida script from the built-in library. Call without script_name to list all available scripts. Available scripts include: ssl_pinning_bypass, root_jailbreak_bypass, class_enumeration, method_hook, crypto_monitor, network_inspector, keychain_prefs, filesystem_monitor.',
     {
-      script_name: z.string().optional().describe('Script name. Omit to list all available scripts.'),
-      target: z.string().optional().describe('App bundle ID, process name, or PID (required when running a script)'),
-      device: z.string().optional().describe('Device ID'),
-      options: z.record(z.unknown()).optional().describe('Script-specific options'),
+      title: 'Run Pre-built Script',
+      description: 'Run a pre-built Frida script from the built-in library. Call without script_name to list all available scripts. Available scripts include: ssl_pinning_bypass, root_jailbreak_bypass, class_enumeration, method_hook, crypto_monitor, network_inspector, keychain_prefs, filesystem_monitor.',
+      inputSchema: {
+        script_name: z.string().optional().describe('Script name. Omit to list all available scripts.'),
+        target: z.string().optional().describe('App bundle ID, process name, or PID (required when running a script)'),
+        device: z.string().optional().describe('Device ID'),
+        options: z.record(z.unknown()).optional().describe('Script-specific options'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ script_name, target, device, options }) => {
+    async ({ script_name, target, device, options, response_format }) => {
       try {
         const registry = getScriptRegistry();
 
@@ -48,7 +59,8 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
                 { tool: 'run_prebuilt_script', args: { script_name: 'ssl_pinning_bypass' }, reason: 'Most commonly used script' },
                 { tool: 'run_prebuilt_script', args: { script_name: 'class_enumeration' }, reason: 'Start exploring app classes' },
               ]
-            )
+            ),
+            response_format
           );
         }
 
@@ -135,11 +147,12 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
               { tool: 'get_messages', args: { session_id: sessionEntry.id }, reason: 'Check script output' },
               { tool: 'mobile_action', args: { action: 'mobile_take_screenshot' }, reason: 'See app state' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
-        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse());
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse(), response_format);
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

@@ -7,16 +7,27 @@ import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
 import { validateProcessTarget } from '../../helpers/sanitize.js';
 import { log } from '../../helpers/logger.js';
 import { rateLimiter } from '../../helpers/rate-limiter.js';
+import { responseFormatSchema } from '../../constants.js';
 
 export function registerAdvancedSessionTools(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'spawn_process',
-    'Spawn a new process in suspended state for early instrumentation. The process will be paused until resume_process is called.',
     {
-      program: z.string().describe('App bundle ID or program path'),
-      device: z.string().optional().describe('Device ID'),
+      title: 'Spawn Process',
+      description: 'Spawn a new process in suspended state for early instrumentation. The process will be paused until resume_process is called.',
+      inputSchema: {
+        program: z.string().describe('App bundle ID or program path'),
+        device: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ program, device: deviceId }) => {
+    async ({ program, device: deviceId, response_format }) => {
       try {
         validateProcessTarget(program);
         const state = getState();
@@ -54,21 +65,31 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         }, [
           { tool: 'resume_process', args: { pid }, reason: 'Resume the process' },
           { tool: 'hook_method', args: { target: program }, reason: 'Hook methods before resuming' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'attach_process',
-    'Attach to an already running process by PID or name.',
     {
-      target: z.union([z.string(), z.number()]).describe('PID (number) or process name (string)'),
-      device: z.string().optional().describe('Device ID'),
+      title: 'Attach to Process',
+      description: 'Attach to an already running process by PID or name.',
+      inputSchema: {
+        target: z.union([z.string(), z.number()]).describe('PID (number) or process name (string)'),
+        device: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ target, device: deviceId }) => {
+    async ({ target, device: deviceId, response_format }) => {
       try {
         const state = getState();
 
@@ -118,21 +139,31 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         }, [
           { tool: 'hook_method', args: { target: String(target) }, reason: 'Hook methods' },
           { tool: 'search_classes_and_methods', args: { target: String(target) }, reason: 'Search for classes' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'resume_process',
-    'Resume a suspended process (after spawn_process).',
     {
-      pid: z.number().describe('Process ID to resume'),
-      device: z.string().optional().describe('Device ID'),
+      title: 'Resume Process',
+      description: 'Resume a suspended process (after spawn_process).',
+      inputSchema: {
+        pid: z.number().describe('Process ID to resume'),
+        device: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ pid, device: deviceId }) => {
+    async ({ pid, device: deviceId, response_format }) => {
       try {
         const state = getState();
         const device = deviceId
@@ -142,21 +173,31 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         await device.resume(pid);
         return formatToolResponse(buildResult({ pid, status: 'resumed' }, [
           { tool: 'get_messages', reason: 'Check for hook/script output' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'kill_process',
-    'Kill a process on the target device.',
     {
-      pid: z.number().describe('Process ID to kill'),
-      device: z.string().optional().describe('Device ID'),
+      title: 'Kill Process',
+      description: 'Kill a process on the target device.',
+      inputSchema: {
+        pid: z.number().describe('Process ID to kill'),
+        device: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ pid, device: deviceId }) => {
+    async ({ pid, device: deviceId, response_format }) => {
       try {
         const state = getState();
         const device = deviceId
@@ -164,20 +205,30 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
           : state.selectedDevice;
         if (!device) throw new FridaMcpError('DEVICE_NOT_FOUND', 'No device selected.', []);
         await device.kill(pid);
-        return formatToolResponse(buildResult({ pid, status: 'killed' }, [{ tool: 'get_status', reason: 'Check state' }]));
+        return formatToolResponse(buildResult({ pid, status: 'killed' }, [{ tool: 'get_status', reason: 'Check state' }]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'detach_session',
-    'Detach from a specific Frida session, unloading all scripts.',
     {
-      session_id: z.string().describe('Session ID to detach'),
+      title: 'Detach Session',
+      description: 'Detach from a specific Frida session, unloading all scripts.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID to detach'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id }) => {
+    async ({ session_id, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -185,25 +236,36 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         for (const s of session.scripts.values()) { try { await s.script.unload(); } catch {} }
         await session.session.detach();
         state.removeSession(session_id);
-        return formatToolResponse(buildResult({ session_id, status: 'detached' }, [{ tool: 'get_status', reason: 'Check state' }]));
+        return formatToolResponse(buildResult({ session_id, status: 'detached' }, [{ tool: 'get_status', reason: 'Check state' }]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'list_sessions',
-    'List all active Frida sessions managed by this server.',
-    {},
-    async () => {
+    {
+      title: 'List Sessions',
+      description: 'List all active Frida sessions managed by this server.',
+      inputSchema: {
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ response_format }) => {
       const state = getState();
       const sessions = Array.from(state.sessions.values()).map((s) => ({
         id: s.id, target: s.target, pid: s.pid, platform: s.platform,
         device: s.deviceId, scripts: s.scripts.size,
         created: new Date(s.createdAt).toISOString(),
       }));
-      return formatToolResponse(buildResult({ sessions }, []));
+      return formatToolResponse(buildResult({ sessions }, []), response_format);
     }
   );
 }

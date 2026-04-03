@@ -9,16 +9,27 @@ import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerSslTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'bypass_ssl_pinning',
-    'One-click SSL certificate pinning bypass for the target app. Auto-detects platform (Android/iOS) and applies the appropriate bypass techniques. On Android: hooks TrustManager, OkHttp CertificatePinner, and Conscrypt. On iOS: hooks SecTrust, ATS, and BoringSSL verification. Returns which bypass methods were successfully installed.',
     {
-      target: z.string().describe('App bundle ID or process name'),
-      device: z.string().optional().describe('Device ID'),
+      title: 'Bypass SSL Pinning',
+      description: 'One-click SSL certificate pinning bypass for the target app. Auto-detects platform (Android/iOS) and applies the appropriate bypass techniques. On Android: hooks TrustManager, OkHttp CertificatePinner, and Conscrypt. On iOS: hooks SecTrust, ATS, and BoringSSL verification. Returns which bypass methods were successfully installed.',
+      inputSchema: {
+        target: z.string().describe('App bundle ID or process name'),
+        device: z.string().optional().describe('Device ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ target, device }) => {
+    async ({ target, device, response_format }) => {
       const startTime = Date.now();
       try {
         validateProcessTarget(target);
@@ -97,10 +108,11 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
               { tool: 'mobile_action', args: { action: 'mobile_take_screenshot' }, reason: 'Navigate the app to trigger network requests' },
               { tool: 'get_messages', args: { session_id: sessionEntry.id }, reason: 'Check bypass status messages' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

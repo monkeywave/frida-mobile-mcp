@@ -10,20 +10,31 @@ import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { createHash } from 'node:crypto';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerScriptTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'execute_script',
-    'Execute a custom Frida JavaScript script in a target process. Provide either inline source code or a file path. Scripts can use the full Frida JavaScript API including Java.perform(), ObjC, Interceptor, Memory, Module, etc. Results are sent via send() and retrieved with get_messages. Note: custom scripts must be explicitly enabled in config (allowCustomScripts: true).',
     {
-      target: z.string().describe('App bundle ID, process name, or PID'),
-      source: z.string().optional().describe('Inline JavaScript source code'),
-      file_path: z.string().optional().describe('Path to a .js Frida script file'),
-      device: z.string().optional().describe('Device ID'),
-      session_id: z.string().optional().describe('Reuse an existing session'),
-      persistent: z.boolean().optional().default(true).describe('Keep script loaded (default: true). Set false for one-shot scripts.'),
+      title: 'Execute Custom Frida Script',
+      description: 'Execute a custom Frida JavaScript script in a target process. Provide either inline source code or a file path. Scripts can use the full Frida JavaScript API including Java.perform(), ObjC, Interceptor, Memory, Module, etc. Results are sent via send() and retrieved with get_messages. Note: custom scripts must be explicitly enabled in config (allowCustomScripts: true).',
+      inputSchema: {
+        target: z.string().describe('App bundle ID, process name, or PID'),
+        source: z.string().optional().describe('Inline JavaScript source code'),
+        file_path: z.string().optional().describe('Path to a .js Frida script file'),
+        device: z.string().optional().describe('Device ID'),
+        session_id: z.string().optional().describe('Reuse an existing session'),
+        persistent: z.boolean().optional().default(true).describe('Keep script loaded (default: true). Set false for one-shot scripts.'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ target, source, file_path, device, session_id, persistent }) => {
+    async ({ target, source, file_path, device, session_id, persistent, response_format }) => {
       const startTime = Date.now();
       try {
         const state = getState();
@@ -126,11 +137,12 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
               : [
                   { tool: 'execute_script', reason: 'Run another script' },
                 ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
         const wrapped = wrapFridaError(err);
-        return formatToolResponse(wrapped.toErrorResponse());
+        return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }
   );

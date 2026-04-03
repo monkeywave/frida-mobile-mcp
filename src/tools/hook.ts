@@ -7,21 +7,32 @@ import { wrapFridaError } from '../helpers/errors.js';
 import { validateProcessTarget, escapeForScript } from '../helpers/sanitize.js';
 import { log, audit } from '../helpers/logger.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerHookTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'hook_method',
-    'Hook a method to intercept calls with auto device/session management. Provide the app target and method pattern. Supports Java methods (Android: "com.example.Class.method"), Objective-C methods (iOS: "-[NSURLSession dataTaskWithRequest:]"), and native functions ("libssl.so!SSL_read"). After hooking, use get_messages to retrieve intercepted calls.',
     {
-      target: z.string().describe('App bundle ID, process name, or PID (as string)'),
-      method: z.string().describe('Method to hook. Java: "com.pkg.Class.method", ObjC: "-[Class method:]", Native: "lib.so!func"'),
-      device: z.string().optional().describe('Device ID. Auto-selects if not specified.'),
-      log_args: z.boolean().optional().default(true).describe('Log method arguments (default: true)'),
-      log_retval: z.boolean().optional().default(true).describe('Log return value (default: true)'),
-      log_backtrace: z.boolean().optional().default(false).describe('Log call backtrace (default: false)'),
-      spawn: z.boolean().optional().default(false).describe('Spawn the app fresh instead of attaching to running process (default: false)'),
+      title: 'Hook Method',
+      description: 'Hook a method to intercept calls with auto device/session management. Provide the app target and method pattern. Supports Java methods (Android: "com.example.Class.method"), Objective-C methods (iOS: "-[NSURLSession dataTaskWithRequest:]"), and native functions ("libssl.so!SSL_read"). After hooking, use get_messages to retrieve intercepted calls.',
+      inputSchema: {
+        target: z.string().describe('App bundle ID, process name, or PID (as string)'),
+        method: z.string().describe('Method to hook. Java: "com.pkg.Class.method", ObjC: "-[Class method:]", Native: "lib.so!func"'),
+        device: z.string().optional().describe('Device ID. Auto-selects if not specified.'),
+        log_args: z.boolean().optional().default(true).describe('Log method arguments (default: true)'),
+        log_retval: z.boolean().optional().default(true).describe('Log return value (default: true)'),
+        log_backtrace: z.boolean().optional().default(false).describe('Log call backtrace (default: false)'),
+        spawn: z.boolean().optional().default(false).describe('Spawn the app fresh instead of attaching to running process (default: false)'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ target, method, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn }) => {
+    async ({ target, method, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn, response_format }) => {
       const startTime = Date.now();
       try {
         validateProcessTarget(target);
@@ -139,7 +150,8 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
               { tool: 'hook_method', reason: 'Hook additional methods' },
               { tool: 'stop_instrumentation', args: { session_id: sessionEntry.id }, reason: 'Remove all hooks when done' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
         const wrapped = wrapFridaError(err);
@@ -150,7 +162,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           status: 'error',
           durationMs: Date.now() - startTime,
         });
-        return formatToolResponse(wrapped.toErrorResponse());
+        return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }
   );

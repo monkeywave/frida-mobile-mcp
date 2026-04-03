@@ -3,18 +3,29 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
+import { responseFormatSchema } from '../../constants.js';
 
 export function registerAdvancedInterceptTools(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'hook_function',
-    'Low-level hook with custom onEnter/onLeave JavaScript handlers. For advanced use when hook_method does not provide enough control.',
     {
-      session_id: z.string().describe('Session ID'),
-      target: z.string().describe('Function target: "module!func", ObjC selector, or hex address'),
-      on_enter: z.string().optional().describe('JavaScript code for onEnter handler. Has access to args[] array.'),
-      on_leave: z.string().optional().describe('JavaScript code for onLeave handler. Has access to retval.'),
+      title: 'Hook Function (Low-Level)',
+      description: 'Low-level hook with custom onEnter/onLeave JavaScript handlers. For advanced use when hook_method does not provide enough control.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID'),
+        target: z.string().describe('Function target: "module!func", ObjC selector, or hex address'),
+        on_enter: z.string().optional().describe('JavaScript code for onEnter handler. Has access to args[] array.'),
+        on_leave: z.string().optional().describe('JavaScript code for onLeave handler. Has access to retval.'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id, target, on_enter, on_leave }) => {
+    async ({ session_id, target, on_enter, on_leave, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -92,20 +103,30 @@ export function registerAdvancedInterceptTools(server: McpServer): void {
         }, [
           { tool: 'get_messages', args: { session_id }, reason: 'Check hook output' },
           { tool: 'unhook_function', args: { hook_id: hookId }, reason: 'Remove this hook' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'unhook_function',
-    'Remove a specific hook by its hook ID.',
     {
-      hook_id: z.string().describe('Hook ID to remove'),
+      title: 'Unhook Function',
+      description: 'Remove a specific hook by its hook ID.',
+      inputSchema: {
+        hook_id: z.string().describe('Hook ID to remove'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ hook_id }) => {
+    async ({ hook_id, response_format }) => {
       try {
         const state = getState();
         const hook = state.hooks.get(hook_id);
@@ -125,9 +146,9 @@ export function registerAdvancedInterceptTools(server: McpServer): void {
           hook_id,
           target: hook.target,
           status: 'removed',
-        }, [{ tool: 'get_status', reason: 'Check remaining hooks' }]));
+        }, [{ tool: 'get_status', reason: 'Check remaining hooks' }]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

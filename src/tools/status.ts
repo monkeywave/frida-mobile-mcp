@@ -5,13 +5,25 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerStatusTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'get_status',
-    'Get an overview of connected devices, active sessions, and hooks. Use this first to understand what is available before starting any instrumentation work.',
-    {},
-    async () => {
+    {
+      title: 'Get Frida Status',
+      description: 'Get an overview of connected devices, active sessions, and hooks. Use this first to understand what is available before starting any instrumentation work.',
+      inputSchema: {
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ response_format }) => {
       try {
         const state = getState();
 
@@ -91,10 +103,10 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
           ]
         );
 
-        return formatToolResponse(result);
+        return formatToolResponse(result, response_format);
       } catch (err) {
         const wrapped = wrapFridaError(err);
-        return formatToolResponse(wrapped.toErrorResponse());
+        return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }
   );

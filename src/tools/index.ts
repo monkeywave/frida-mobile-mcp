@@ -14,3 +14,4 @@ export { registerSslTool } from './ssl.js';
 export { registerMessagesTool } from './messages.js';
 export { registerCleanupTool } from './cleanup.js';
 export { registerMobileTool } from './mobile.js';
+export { registerDetectTool } from './detect.js';

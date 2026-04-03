@@ -72,7 +72,7 @@ describe('ScriptRegistry', () => {
   it('class_enumeration accepts filter option', () => {
     const template = registry.get('class_enumeration')!;
     const source = template.generate({ filter: 'com\\.example\\..*', limit: 100 });
-    expect(source).toContain('com\\.example\\..*');
+    expect(source).toContain('com\\\\.example\\\\..*');
     expect(source).toContain('100');
   });
 });

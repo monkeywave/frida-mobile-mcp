@@ -26,7 +26,7 @@ npx frida-mobile-mcp
 
 ## Features
 
-- **31 MCP Tools** — 15 high-level (Tier 1) + 16 advanced (Tier 2)
+- **32 MCP Tools** — 16 high-level (Tier 1) + 16 advanced (Tier 2)
 - **8 Pre-built Scripts** — SSL bypass, root/jailbreak bypass, crypto monitor, network inspector, and more
 - **mobile-mcp Integration** — UI automation (screenshots, taps, swipes) via gateway pattern
 - **AI-Optimized UX** — Structured returns with `session_context` and `suggested_next` actions
@@ -58,8 +58,7 @@ frida-mobile-mcp
 Usage: frida-mobile-mcp [options]
 
 Options:
-  --transport <type>       stdio or http (default: "stdio")
-  --port <number>          HTTP port (default: "3000")
+  --transport <type>       Transport type: stdio (default: "stdio")
   --device <id>            Frida device ID
   --allow-custom-scripts   Allow custom Frida script execution
   --allow-memory-write     Allow memory write operations
@@ -67,10 +66,13 @@ Options:
   --debug                  Enable debug logging
 ```
 
+> **Note:** HTTP transport (`--transport http`, `--port`) is planned but not yet implemented. Use stdio transport (default).
+
 ## Tool Reference (Tier 1)
 
 | Tool | Description |
 |------|-------------|
+| `detect_app_technologies` | Detect app libraries and recommend scripts |
 | `get_status` | Overview of devices, sessions, hooks |
 | `explore_app` | Launch app + enumerate classes/modules |
 | `hook_method` | One-call method hooking (Java/ObjC/native) |

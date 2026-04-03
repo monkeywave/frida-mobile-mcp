@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { MobileMcpUnavailableError, FridaMcpError } from '../helpers/errors.js';
+import { responseFormatSchema } from '../constants.js';
 import { log, audit } from '../helpers/logger.js';
 
 // Available mobile-mcp actions for reference
@@ -31,14 +32,24 @@ const MOBILE_ACTIONS = [
 ];
 
 export function registerMobileTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'mobile_action',
-    `Gateway to mobile-mcp UI automation tools. Perform screenshots, taps, swipes, text input, app management and more. Common actions: mobile_take_screenshot, mobile_list_elements_on_screen, mobile_click_on_screen_at_coordinates (params: {x, y}), mobile_swipe_on_screen (params: {direction}), mobile_type_keys (params: {text}), mobile_launch_app (params: {appId}), mobile_list_apps. Call without action to see all available actions.`,
     {
-      action: z.string().optional().describe('mobile-mcp action name (e.g., "mobile_take_screenshot"). Omit to list available actions.'),
-      params: z.record(z.unknown()).optional().describe('Parameters for the action'),
+      title: 'Mobile UI Action',
+      description: `Gateway to mobile-mcp UI automation tools. Perform screenshots, taps, swipes, text input, app management and more. Common actions: mobile_take_screenshot, mobile_list_elements_on_screen, mobile_click_on_screen_at_coordinates (params: {x, y}), mobile_swipe_on_screen (params: {direction}), mobile_type_keys (params: {text}), mobile_launch_app (params: {appId}), mobile_list_apps. Call without action to see all available actions.`,
+      inputSchema: {
+        action: z.string().optional().describe('mobile-mcp action name (e.g., "mobile_take_screenshot"). Omit to list available actions.'),
+        params: z.record(z.unknown()).optional().describe('Parameters for the action'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ action, params }) => {
+    async ({ action, params, response_format }) => {
       try {
         const state = getState();
 
@@ -70,7 +81,8 @@ export function registerMobileTool(server: McpServer): void {
                 { tool: 'mobile_action', args: { action: 'mobile_take_screenshot' }, reason: 'Take a screenshot' },
                 { tool: 'mobile_action', args: { action: 'mobile_list_apps' }, reason: 'List installed apps' },
               ]
-            )
+            ),
+            response_format
           );
         }
 
@@ -97,7 +109,8 @@ export function registerMobileTool(server: McpServer): void {
                 { tool: 'mobile_action', args: { action: 'mobile_list_elements_on_screen' }, reason: 'List UI elements' },
                 { tool: 'hook_method', reason: 'Hook a method to trace what happens after this action' },
               ]
-            )
+            ),
+            response_format
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -107,11 +120,12 @@ export function registerMobileTool(server: McpServer): void {
           throw err;
         }
       } catch (err) {
-        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse());
+        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse(), response_format);
         return formatToolResponse(
           new FridaMcpError('MOBILE_ERROR', err instanceof Error ? err.message : String(err), [
             { tool: 'mobile_action', reason: 'List available actions' },
-          ]).toErrorResponse()
+          ]).toErrorResponse(),
+          response_format
         );
       }
     }

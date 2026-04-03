@@ -3,15 +3,26 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
+import { responseFormatSchema } from '../../constants.js';
 
 export function registerAdvancedModuleTools(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'enumerate_modules',
-    'List loaded modules (shared libraries) in the target process.',
     {
-      session_id: z.string().describe('Session ID'),
+      title: 'Enumerate Modules',
+      description: 'List loaded modules (shared libraries) in the target process.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id }) => {
+    async ({ session_id, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -30,21 +41,31 @@ export function registerAdvancedModuleTools(server: McpServer): void {
 
         return formatToolResponse(buildResult({ session_id, modules }, [
           { tool: 'enumerate_exports', reason: 'List exports of a module' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );
 
-  server.tool(
+  server.registerTool(
     'enumerate_exports',
-    'List exports (functions and variables) of a specific module.',
     {
-      session_id: z.string().describe('Session ID'),
-      module_name: z.string().describe('Module name (e.g., "libssl.so")'),
+      title: 'Enumerate Module Exports',
+      description: 'List exports (functions and variables) of a specific module.',
+      inputSchema: {
+        session_id: z.string().describe('Session ID'),
+        module_name: z.string().describe('Module name (e.g., "libssl.so")'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
-    async ({ session_id, module_name }) => {
+    async ({ session_id, module_name, response_format }) => {
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -69,9 +90,9 @@ export function registerAdvancedModuleTools(server: McpServer): void {
           truncated: exports.length > 200,
         }, [
           { tool: 'hook_method', args: { method: `${module_name}!${exports[0]?.name}` }, reason: 'Hook an export' },
-        ]));
+        ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse());
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
     }
   );

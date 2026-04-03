@@ -20,9 +20,10 @@ function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T>
 
 export function registerResources(server: McpServer, deviceManager: DeviceManager): void {
   // Static: frida://version
-  server.resource(
+  server.registerResource(
     'frida-version',
     'frida://version',
+    { description: 'Current Frida runtime version', mimeType: 'application/json' },
     async (uri) => ({
       contents: [{
         uri: uri.href,
@@ -33,9 +34,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Static: frida://devices
-  server.resource(
+  server.registerResource(
     'frida-devices',
     'frida://devices',
+    { description: 'List of connected Frida devices', mimeType: 'application/json' },
     async (uri) => {
       try {
         const devices = await cached('devices', 5000, () => deviceManager.listDevices());
@@ -47,9 +49,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Template: frida://devices/{id}
-  server.resource(
+  server.registerResource(
     'frida-device-info',
     new ResourceTemplate('frida://devices/{id}', { list: undefined }),
+    { description: 'Detailed information about a specific device', mimeType: 'application/json' },
     async (uri, variables) => {
       const id = String(variables.id);
       try {
@@ -62,9 +65,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Template: frida://devices/{id}/processes
-  server.resource(
+  server.registerResource(
     'frida-device-processes',
     new ResourceTemplate('frida://devices/{id}/processes', { list: undefined }),
+    { description: 'Running processes on a specific device', mimeType: 'application/json' },
     async (uri, variables) => {
       const id = String(variables.id);
       try {
@@ -79,9 +83,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Template: frida://devices/{id}/apps
-  server.resource(
+  server.registerResource(
     'frida-device-apps',
     new ResourceTemplate('frida://devices/{id}/apps', { list: undefined }),
+    { description: 'Installed applications on a specific device', mimeType: 'application/json' },
     async (uri, variables) => {
       const id = String(variables.id);
       try {
@@ -96,9 +101,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Static: frida://sessions
-  server.resource(
+  server.registerResource(
     'frida-sessions',
     'frida://sessions',
+    { description: 'Active Frida instrumentation sessions', mimeType: 'application/json' },
     async (uri) => {
       const state = getState();
       const sessions = Array.from(state.sessions.values()).map((s) => ({
@@ -110,9 +116,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Template: frida://sessions/{id}
-  server.resource(
+  server.registerResource(
     'frida-session-detail',
     new ResourceTemplate('frida://sessions/{id}', { list: undefined }),
+    { description: 'Details of a specific instrumentation session', mimeType: 'application/json' },
     async (uri, variables) => {
       const state = getState();
       const session = state.getSession(String(variables.id));
@@ -135,9 +142,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Template: frida://sessions/{id}/messages
-  server.resource(
+  server.registerResource(
     'frida-session-messages',
     new ResourceTemplate('frida://sessions/{id}/messages', { list: undefined }),
+    { description: 'Messages from scripts in a specific session', mimeType: 'application/json' },
     async (uri, variables) => {
       const state = getState();
       const session = state.getSession(String(variables.id));
@@ -156,9 +164,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Static: frida://scripts
-  server.resource(
+  server.registerResource(
     'frida-scripts-catalog',
     'frida://scripts',
+    { description: 'Catalog of available pre-built Frida scripts', mimeType: 'application/json' },
     async (uri) => {
       const registry = getScriptRegistry();
       const scripts = registry.listAll().map((s) => ({
@@ -170,9 +179,10 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
   );
 
   // Template: frida://scripts/{name}
-  server.resource(
+  server.registerResource(
     'frida-script-detail',
     new ResourceTemplate('frida://scripts/{name}', { list: undefined }),
+    { description: 'Details of a specific pre-built script', mimeType: 'application/json' },
     async (uri, variables) => {
       const registry = getScriptRegistry();
       const template = registry.get(String(variables.name));

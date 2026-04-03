@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
+import { createRequire } from 'module';
 import { createServer } from './server.js';
 import { createStdioTransport } from './transport/stdio.js';
 import { logStartupBanner, log } from './helpers/logger.js';
 import { getState } from './state.js';
 
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json');
+
 program
   .name('frida-mobile-mcp')
   .description('Mobile Frida MCP Server - AI-powered mobile app exploration and testing')
-  .version('0.1.0')
+  .version(version)
   .option('--transport <type>', 'Transport type: stdio or http', 'stdio')
   .option('--port <number>', 'HTTP port (when using http transport)', '3000')
   .option('--device <id>', 'Frida device ID to use')
@@ -24,6 +28,11 @@ const opts = program.opts();
 
 async function main(): Promise<void> {
   logStartupBanner();
+
+  // Wire --debug flag to environment variable (checked by logger)
+  if (opts.debug) {
+    process.env.FRIDA_MCP_DEBUG = '1';
+  }
 
   const configOverrides: Record<string, unknown> = {};
   if (opts.allowCustomScripts) {

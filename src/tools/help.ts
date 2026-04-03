@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
+import { responseFormatSchema } from '../constants.js';
 
 const HELP_TOPICS: Record<string, string> = {
   overview: `# frida-mobile-mcp: Mobile Frida MCP Server
@@ -10,10 +11,11 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 
 ## Quick Start
 1. \`get_status\` — See connected devices and current state
-2. \`explore_app\` — Launch an app and get initial context (screenshot, classes, libraries)
-3. \`hook_method\` — Hook a specific method to intercept calls
-4. \`trace_method\` — Trace function calls for a duration
-5. \`bypass_ssl_pinning\` — One-click SSL pinning bypass
+2. \`detect_app_technologies\` — **Run this first!** Fingerprint the app's tech stack and get tailored script recommendations
+3. \`explore_app\` — Launch an app and get initial context (screenshot, classes, libraries)
+4. \`hook_method\` — Hook a specific method to intercept calls
+5. \`trace_method\` — Trace function calls for a duration
+6. \`bypass_ssl_pinning\` — One-click SSL pinning bypass
 
 ## Tool Categories
 - **Exploration**: explore_app, search_classes_and_methods
@@ -22,6 +24,9 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 - **Memory**: read_memory, write_memory, scan_memory
 - **Mobile UI**: mobile_action (tap, swipe, screenshot, elements via mobile-mcp)
 - **Management**: get_status, get_messages, stop_instrumentation
+
+## Response Format
+All tools default to **TOON** (Token-Oriented Object Notation) — ~40% fewer tokens than JSON with equal or better LLM comprehension. Pass \`response_format: "markdown"\` for human-readable output or \`response_format: "json"\` for raw structured data.
 
 ## Tip
 Most tools auto-manage device selection and sessions. Just provide the app bundle ID or name.`,
@@ -196,18 +201,55 @@ These tools provide fine-grained control when the high-level tools don't fit you
 ## Low-level Hooking
 - \`hook_function\` — Install a hook with custom onEnter/onLeave JavaScript handlers
 - \`unhook_function\` — Remove a specific hook by ID`,
+
+  script_catalog: `# Task-Oriented Script Catalog
+
+## "I want to intercept HTTPS traffic"
+1. \`detect_app_technologies\` → identify HTTP client library
+2. \`bypass_ssl_pinning\` → disable certificate pinning
+3. \`network_inspector\` → monitor network operations, DNS, TLS
+4. \`get_messages\` → read captured data
+
+## "I want to find where the app stores credentials"
+1. \`keychain_prefs\` → monitor Keychain/SharedPreferences access
+2. \`filesystem_monitor\` → monitor file I/O and SQLite
+3. \`crypto_monitor\` → detect key derivation and encryption
+
+## "The app detects root/jailbreak and crashes"
+1. \`root_jailbreak_bypass\` (run BEFORE app starts via spawn)
+2. \`get_messages\` → check which detection methods were triggered
+3. If still detected: use \`class_enumeration\` to find custom detection
+
+## "I want to understand what an app does"
+1. \`detect_app_technologies\` → map the app's tech stack
+2. \`explore_app\` → enumerate classes and modules
+3. \`class_enumeration\` with include_methods:true → deep class analysis
+4. \`method_hook\` → hook specific methods for dynamic analysis
+
+## New: detect_app_technologies
+Run this first! It fingerprints 20+ libraries and recommends which scripts to use with optimal targets.`,
 };
 
 export function registerHelpTool(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'frida_help',
-    'Get help on how to use frida-mobile-mcp tools. Use this to learn about available capabilities, method hooking patterns, script templates, and example workflows. Topics: overview, hooking, tracing, memory, scripts, mobile, examples, advanced.',
     {
-      topic: z.string()
-        .optional()
-        .describe('Help topic: overview, hooking, tracing, memory, scripts, mobile, examples, advanced. Default: overview'),
+      title: 'Frida Help',
+      description: 'Get help on how to use frida-mobile-mcp tools. Use this to learn about available capabilities, method hooking patterns, script templates, and example workflows. Topics: overview, hooking, tracing, memory, scripts, mobile, examples, advanced, script_catalog.',
+      inputSchema: {
+        topic: z.string()
+          .optional()
+          .describe('Help topic: overview, hooking, tracing, memory, scripts, mobile, examples, advanced, script_catalog. Default: overview'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
-    async ({ topic }) => {
+    async ({ topic, response_format }) => {
       const selectedTopic = topic || 'overview';
       const content = HELP_TOPICS[selectedTopic];
 
@@ -217,7 +259,7 @@ export function registerHelpTool(server: McpServer): void {
           buildResult(
             { message: `Unknown topic "${selectedTopic}". Available topics: ${available}` },
             [{ tool: 'frida_help', args: { topic: 'overview' }, reason: 'Start with the overview' }]
-          )
+          ), response_format
         );
       }
 
@@ -232,7 +274,7 @@ export function registerHelpTool(server: McpServer): void {
             : [
                 { tool: 'frida_help', args: { topic: 'overview' }, reason: 'Back to overview' },
               ]
-        )
+        ), response_format
       );
     }
   );

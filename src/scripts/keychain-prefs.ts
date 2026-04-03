@@ -1,4 +1,5 @@
 import type { ScriptTemplate } from '../types.js';
+import { getFridaRuntime } from './frida-runtime.js';
 
 export const keychainPrefsTemplate: ScriptTemplate = {
   name: 'keychain_prefs',
@@ -12,6 +13,7 @@ export const keychainPrefsTemplate: ScriptTemplate = {
   generate: (options) => {
     return `
     (function() {
+      ${getFridaRuntime()}
       if (Java && Java.available) {
         Java.perform(function() {
           try {
@@ -50,39 +52,27 @@ export const keychainPrefsTemplate: ScriptTemplate = {
 
       if (ObjC && ObjC.available) {
         // SecItemCopyMatching
-        try {
-          var SecItemCopyMatching = Module.findExportByName('Security', 'SecItemCopyMatching');
-          if (SecItemCopyMatching) {
-            Interceptor.attach(SecItemCopyMatching, {
-              onEnter: function(args) {
-                try {
-                  var query = new ObjC.Object(args[0]);
-                  this.query = query.toString();
-                } catch(e) { this.query = 'unknown'; }
-              },
-              onLeave: function(retval) {
-                send({ api: 'SecItemCopyMatching', query: this.query, result: retval.toInt32() === 0 ? 'found' : 'not_found', operation: 'read' });
-              }
-            });
-            send({ status: 'hooked', api: 'SecItemCopyMatching' });
+        hookNative('Security', 'SecItemCopyMatching', {
+          onEnter: function(args) {
+            try {
+              var query = new ObjC.Object(args[0]);
+              this.query = query.toString();
+            } catch(e) { this.query = 'unknown'; }
+          },
+          onLeave: function(retval) {
+            send({ api: 'SecItemCopyMatching', query: this.query, result: retval.toInt32() === 0 ? 'found' : 'not_found', operation: 'read' });
           }
-        } catch(e) {}
+        });
 
         // SecItemAdd
-        try {
-          var SecItemAdd = Module.findExportByName('Security', 'SecItemAdd');
-          if (SecItemAdd) {
-            Interceptor.attach(SecItemAdd, {
-              onEnter: function(args) {
-                try { this.attrs = new ObjC.Object(args[0]).toString(); } catch(e) { this.attrs = 'unknown'; }
-              },
-              onLeave: function(retval) {
-                send({ api: 'SecItemAdd', attributes: this.attrs, result: retval.toInt32() === 0 ? 'success' : 'error', operation: 'write' });
-              }
-            });
-            send({ status: 'hooked', api: 'SecItemAdd' });
+        hookNative('Security', 'SecItemAdd', {
+          onEnter: function(args) {
+            try { this.attrs = new ObjC.Object(args[0]).toString(); } catch(e) { this.attrs = 'unknown'; }
+          },
+          onLeave: function(retval) {
+            send({ api: 'SecItemAdd', attributes: this.attrs, result: retval.toInt32() === 0 ? 'success' : 'error', operation: 'write' });
           }
-        } catch(e) {}
+        });
 
         // NSUserDefaults
         try {
@@ -96,7 +86,28 @@ export const keychainPrefsTemplate: ScriptTemplate = {
           });
           send({ status: 'hooked', api: 'NSUserDefaults' });
         } catch(e) {}
+
+        // SecItemUpdate
+        hookNative('Security', 'SecItemUpdate', {
+          onEnter: function(args) {
+            try { this.query = new ObjC.Object(args[0]).toString(); this.attrs = new ObjC.Object(args[1]).toString(); } catch(e) { this.query = 'unknown'; this.attrs = 'unknown'; }
+          },
+          onLeave: function(retval) {
+            send({ api: 'SecItemUpdate', query: this.query, attributes: this.attrs, result: retval.toInt32() === 0 ? 'success' : 'error', operation: 'update' });
+          }
+        });
+
+        // SecItemDelete
+        hookNative('Security', 'SecItemDelete', {
+          onEnter: function(args) {
+            try { this.query = new ObjC.Object(args[0]).toString(); } catch(e) { this.query = 'unknown'; }
+          },
+          onLeave: function(retval) {
+            send({ api: 'SecItemDelete', query: this.query, result: retval.toInt32() === 0 ? 'success' : 'error', operation: 'delete' });
+          }
+        });
       }
+      reportSummary('keychain_prefs');
     })();
     `;
   },

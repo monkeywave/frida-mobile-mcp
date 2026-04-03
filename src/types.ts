@@ -80,6 +80,8 @@ export interface SuggestedAction {
   tool: string;
   args?: Record<string, unknown>;
   reason: string;
+  condition?: string;
+  priority?: 'required' | 'recommended' | 'optional';
 }
 
 // Error types
@@ -100,15 +102,17 @@ export interface RecoveryAction {
   message?: string;
 }
 
+export type ScriptCategory = 'bypass' | 'enumeration' | 'security' | 'network' | 'crypto' | 'filesystem' | 'detection';
+
 // Script template
 export interface ScriptTemplate {
   name: string;
   description: string;
   platforms: Array<'android' | 'ios'>;
-  category: 'bypass' | 'enumeration' | 'security' | 'network' | 'crypto' | 'filesystem';
+  category: ScriptCategory;
   riskTier: 1 | 2 | 3;
   options?: Record<string, ScriptOption>;
-  generate: (options: Record<string, unknown>) => string;
+  generate: (options: Record<string, unknown>, context?: PlatformContext) => string;
 }
 
 export interface ScriptOption {
@@ -116,6 +120,13 @@ export interface ScriptOption {
   description: string;
   default?: unknown;
   required?: boolean;
+}
+
+export interface PlatformContext {
+  platform: 'android' | 'ios' | 'unknown';
+  apiLevel?: number;
+  osVersion?: string;
+  arch?: string;
 }
 
 // Device info

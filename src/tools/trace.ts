@@ -7,20 +7,31 @@ import { wrapFridaError } from '../helpers/errors.js';
 import { validateProcessTarget, escapeForScript } from '../helpers/sanitize.js';
 import { log, audit } from '../helpers/logger.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
+import { responseFormatSchema } from '../constants.js';
 
 export function registerTraceTool(server: McpServer, deviceManager: DeviceManager): void {
-  server.tool(
+  server.registerTool(
     'trace_method',
-    'Trace function calls matching a pattern for a specified duration. Simplified frida-trace equivalent. Supports glob patterns like "com.example.network.*" for Java, "-[NSURL*]" for ObjC, and "libssl.so!SSL_*" for native. Returns all captured invocations after the duration expires.',
     {
-      target: z.string().describe('App bundle ID, process name, or PID'),
-      method: z.string().describe('Method pattern to trace. Supports * wildcards.'),
-      device: z.string().optional().describe('Device ID'),
-      duration_seconds: z.number().optional().default(10).describe('How long to trace (default: 10 seconds)'),
-      log_args: z.boolean().optional().default(true).describe('Log arguments'),
-      log_retval: z.boolean().optional().default(true).describe('Log return values'),
+      title: 'Trace Method Calls',
+      description: 'Trace function calls matching a pattern for a specified duration. Simplified frida-trace equivalent. Supports glob patterns like "com.example.network.*" for Java, "-[NSURL*]" for ObjC, and "libssl.so!SSL_*" for native. Returns all captured invocations after the duration expires.',
+      inputSchema: {
+        target: z.string().describe('App bundle ID, process name, or PID'),
+        method: z.string().describe('Method pattern to trace. Supports * wildcards.'),
+        device: z.string().optional().describe('Device ID'),
+        duration_seconds: z.number().optional().default(10).describe('How long to trace (default: 10 seconds)'),
+        log_args: z.boolean().optional().default(true).describe('Log arguments'),
+        log_retval: z.boolean().optional().default(true).describe('Log return values'),
+        response_format: responseFormatSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async ({ target, method, device, duration_seconds, log_args, log_retval }) => {
+    async ({ target, method, device, duration_seconds, log_args, log_retval, response_format }) => {
       const startTime = Date.now();
       try {
         validateProcessTarget(target);
@@ -111,11 +122,12 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
               { tool: 'trace_method', args: { target, method, duration_seconds: duration * 2 }, reason: 'Trace longer for more results' },
               { tool: 'search_classes_and_methods', reason: 'Find related methods to trace' },
             ]
-          )
+          ),
+          response_format
         );
       } catch (err) {
         const wrapped = wrapFridaError(err);
-        return formatToolResponse(wrapped.toErrorResponse());
+        return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }
   );
