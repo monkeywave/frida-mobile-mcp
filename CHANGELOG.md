@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.2...v0.2.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* remove duplicate publish job from release.yml ([28a1504](https://github.com/monkeywave/frida-mobile-mcp/commit/28a150468ee4a32987bbab700c0467f8adc048a8))
+
 ## [0.2.2](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.1...v0.2.2) (2026-04-03)
 
 
