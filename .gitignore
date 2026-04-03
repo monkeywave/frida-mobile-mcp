@@ -11,4 +11,3 @@ script_archive/
 .DS_Store
 coverage/
 .vitest/
-package-lock.json
