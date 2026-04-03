@@ -1,4 +1,8 @@
 # frida-mobile-mcp
+![](https://img.shields.io/badge/Node.js-18%2B-brightgreen?style=flat-square) [![npm]](https://www.npmjs.com/package/frida-mobile-mcp)
+
+[npm]: https://img.shields.io/npm/v/frida-mobile-mcp.svg?style=flat-square
+
 
 Mobile Frida MCP Server — AI-powered mobile app exploration and testing via Frida dynamic instrumentation.
 
