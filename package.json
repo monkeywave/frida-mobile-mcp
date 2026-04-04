@@ -30,6 +30,10 @@
     "instrumentation",
     "reverse-engineering"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monkeywave/frida-mobile-mcp"
+  },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
