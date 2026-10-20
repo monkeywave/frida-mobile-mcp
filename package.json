@@ -65,7 +65,7 @@
     "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
     "frida-java-bridge": "^7.0.13",
     "frida-objc-bridge": "^8.0.6",
     "rollup": "^4.64.10",
