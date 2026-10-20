@@ -2,8 +2,8 @@
  * Runs frida-node's Compiler locally (no device needed). Set FRIDA_MCP_SKIP_COMPILER=1 to skip,
  * e.g. on CI runners without the frida native binding or without the bridge devDependencies.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -13,6 +13,8 @@ import {
   looksLikeTypeScript,
   formatDiagnostics,
   getCompilerProjectDir,
+  linkPackage,
+  needsRefresh,
 } from '../../src/agent/compiler.js';
 import { isFridaCompileBundle } from '../../src/agent/script-factory.js';
 import { ScriptError } from '../../src/helpers/errors.js';
@@ -51,6 +53,46 @@ describe('formatDiagnostics', () => {
       { severity: 'warning', message: 'meh', file: null, line: null, column: null, code: null },
     ]);
     expect(text).toBe('agent.ts:2:7: error: boom\nwarning: meh');
+  });
+});
+
+describe('linkPackage / needsRefresh', () => {
+  const packageName = 'frida-java-bridge';
+  const src = path.resolve('node_modules', packageName);
+  let root: string;
+
+  const installedDir = (): string => path.join(root, 'node_modules', packageName);
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), 'frida-mcp-link-'));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('copies the package instead of linking it on win32', () => {
+    linkPackage(root, packageName, src, 'win32');
+    expect(lstatSync(installedDir()).isSymbolicLink()).toBe(false);
+    expect(existsSync(path.join(installedDir(), 'package.json'))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('links the package on posix', () => {
+    linkPackage(root, packageName, src, 'linux');
+    expect(lstatSync(installedDir()).isSymbolicLink()).toBe(true);
+    expect(existsSync(path.join(installedDir(), 'package.json'))).toBe(true);
+  });
+
+  it('needsRefresh is true when the installed version differs and false after linking', () => {
+    mkdirSync(installedDir(), { recursive: true });
+    writeFileSync(path.join(installedDir(), 'package.json'), '{"name":"frida-java-bridge","version":"0.0.1"}\n');
+    expect(needsRefresh(root, packageName, src)).toBe(true);
+    linkPackage(root, packageName, src, 'win32');
+    expect(needsRefresh(root, packageName, src)).toBe(false);
+  });
+
+  it('needsRefresh is true when nothing is installed', () => {
+    expect(needsRefresh(root, packageName, src)).toBe(true);
   });
 });
 

@@ -21,7 +21,11 @@
         { "type": "chore", "section": "Miscellaneous", "hidden": false },
         { "type": "security", "section": "Security", "hidden": false }
       ],
-      "extra-files": []
+      "extra-files": [
+        { "type": "json", "path": "server.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "server.json", "jsonpath": "$.packages[0].version" },
+        { "type": "json", "path": "manifest.json", "jsonpath": "$.version" }
+      ]
     }
   }
 }

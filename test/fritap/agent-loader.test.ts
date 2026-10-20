@@ -81,7 +81,7 @@ describe('helpers', () => {
   });
 
   it('fritapCacheDir honours XDG_CONFIG_HOME', () => {
-    expect(fritapCacheDir('v2.5.2', { XDG_CONFIG_HOME: '/x' })).toBe('/x/frida-mobile-mcp/fritap/v2.5.2');
+    expect(fritapCacheDir('v2.5.2', { XDG_CONFIG_HOME: '/x' })).toBe(path.join('/x', 'frida-mobile-mcp', 'fritap', 'v2.5.2'));
   });
 
   it('isValidFritapBundle requires the frida-compile marker', () => {

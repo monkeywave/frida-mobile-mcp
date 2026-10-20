@@ -4,6 +4,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
     groups:
       # frida's native runtime and the bundled bridges must move together:
       # the bridge packages target a specific Frida major version.
@@ -15,8 +16,28 @@ updates:
       modelcontextprotocol:
         patterns:
           - '@modelcontextprotocol/*'
+      # Routine bumps arrive as a single PR; majors stay individual PRs for review.
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # @types/node must track the oldest supported Node (engines.node), not the newest.
+      - dependency-name: '@types/node'
+        update-types:
+          - version-update:semver-major
+      # TypeScript 7 (native port) is a deliberate migration, not a bot bump.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - '*'

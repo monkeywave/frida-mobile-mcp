@@ -21,7 +21,17 @@
 import frida from 'frida';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { cpSync, existsSync, lstatSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,17 +150,54 @@ function isInstalled(projectRoot: string, name: string): boolean {
   return existsSync(path.join(projectRoot, 'node_modules', name, 'package.json'));
 }
 
-/** Symlink the package into the project; copy when symlinks are not allowed (e.g. Windows). */
-function linkPackage(projectRoot: string, name: string, sourceDir: string): void {
+function copyPackage(target: string, sourceDir: string): void {
+  cpSync(sourceDir, target, { recursive: true, dereference: true });
+}
+
+function symlinkPackage(target: string, sourceDir: string): void {
+  symlinkSync(sourceDir, target, 'junction');
+}
+
+/**
+ * Put the package into the project's `node_modules`: a copy on Windows, a symlink elsewhere
+ * (falling back to a copy when symlinks are not permitted). Exported as a test hook.
+ */
+export function linkPackage(
+  projectRoot: string,
+  name: string,
+  sourceDir: string,
+  platform: NodeJS.Platform = process.platform
+): void {
   const target = path.join(projectRoot, 'node_modules', name);
   mkdirSync(path.dirname(target), { recursive: true });
   removeIfPresent(target);
+  if (platform === 'win32') {
+    // frida-core's TypeScript host cannot read through junctions, see frida/frida-compile#104.
+    copyPackage(target, sourceDir);
+    return;
+  }
   try {
-    symlinkSync(sourceDir, target, 'junction');
+    symlinkPackage(target, sourceDir);
   } catch (err) {
     log('debug', `Symlink for ${name} failed (${String(err)}); copying instead`);
-    cpSync(sourceDir, target, { recursive: true, dereference: true });
+    copyPackage(target, sourceDir);
   }
+}
+
+function installedVersion(dir: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version?: unknown };
+    return typeof parsed.version === 'string' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the package is missing or its version differs from the local source. Exported as a test hook. */
+export function needsRefresh(projectRoot: string, name: string, sourceDir: string): boolean {
+  const installedDir = path.join(projectRoot, 'node_modules', name);
+  if (!isInstalled(projectRoot, name)) return true;
+  return installedVersion(installedDir) !== installedVersion(sourceDir);
 }
 
 function removeIfPresent(target: string): void {
@@ -174,11 +221,10 @@ async function installFromRegistry(projectRoot: string, deps: DependencySpec[]):
 async function populateDependencies(projectRoot: string): Promise<void> {
   const missing: DependencySpec[] = [];
   for (const dep of DEPENDENCIES) {
-    if (isInstalled(projectRoot, dep.name)) continue;
     const local = findLocalPackage(dep.name);
     if (local) {
-      linkPackage(projectRoot, dep.name, local);
-    } else {
+      if (needsRefresh(projectRoot, dep.name, local)) linkPackage(projectRoot, dep.name, local);
+    } else if (!isInstalled(projectRoot, dep.name)) {
       missing.push(dep);
     }
   }
@@ -271,7 +317,8 @@ function normalizeDiagnostic(raw: unknown, displayName: string | undefined, temp
   const line = location ? toNumber(location.line) : null;
   const column = location ? toNumber(location.character) : null;
   let file = location && typeof location.path === 'string' ? location.path : null;
-  if (file && displayName && path.posix.basename(file) === tempFile) file = displayName;
+  // path.basename handles both separators on win32; POSIX frida only emits '/'.
+  if (file && displayName && path.basename(file) === tempFile) file = displayName;
   // TypeScript diagnostics carry 0-based lines; esbuild (syntax) diagnostics, marked by code -1,
   // already carry 1-based lines. Columns are 0-based in both.
   const lineOffset = code === ESBUILD_DIAGNOSTIC_CODE ? 0 : 1;

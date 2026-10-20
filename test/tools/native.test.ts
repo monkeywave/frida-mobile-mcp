@@ -15,8 +15,8 @@ describe('resolveDumpOutputPath', () => {
   const roots = ['/work/project', '/tmp/scratch'];
 
   it('accepts absolute paths under an allowed root', () => {
-    expect(resolveDumpOutputPath('/work/project/dumps/libfoo.bin', roots)).toBe('/work/project/dumps/libfoo.bin');
-    expect(resolveDumpOutputPath('/tmp/scratch/x.bin', roots)).toBe('/tmp/scratch/x.bin');
+    expect(resolveDumpOutputPath('/work/project/dumps/libfoo.bin', roots)).toBe(path.resolve('/work/project/dumps/libfoo.bin'));
+    expect(resolveDumpOutputPath('/tmp/scratch/x.bin', roots)).toBe(path.resolve('/tmp/scratch/x.bin'));
   });
 
   it('rejects relative paths', () => {
