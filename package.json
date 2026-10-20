@@ -69,7 +69,7 @@
     "frida-java-bridge": "^7.0.13",
     "frida-objc-bridge": "^8.0.6",
     "rollup": "^4.64.10",
-    "typescript": "^5.5.0",
+    "typescript": "^7.0.2",
     "vitest": "^2.0.0"
   },
   "engines": {
