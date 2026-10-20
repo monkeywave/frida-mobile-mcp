@@ -1,7 +1,16 @@
 import { z } from 'zod';
+import { getActiveConfig } from './config.js';
 
-/** Maximum response size in characters to prevent overwhelming LLM context windows. */
+/** Default maximum response size in characters to prevent overwhelming LLM context windows. */
 export const CHARACTER_LIMIT = 25_000;
+
+/**
+ * Effective response character limit: `FRIDA_MCP_MAX_RESPONSE_CHARS` (via the loaded config)
+ * when set, otherwise `CHARACTER_LIMIT`.
+ */
+export function getCharacterLimit(): number {
+  return getActiveConfig()?.maxResponseChars ?? CHARACTER_LIMIT;
+}
 
 
 /**
@@ -18,6 +27,6 @@ export enum ResponseFormat {
 }
 
 /** Reusable Zod schema fragment for the response_format parameter. */
-export const responseFormatSchema = z.nativeEnum(ResponseFormat)
+export const responseFormatSchema = z.enum(ResponseFormat)
   .default(ResponseFormat.TOON)
   .describe('Output format: "toon" (default, ~40% fewer tokens — recommended), "markdown" for human-readable, "json" for raw structured data');

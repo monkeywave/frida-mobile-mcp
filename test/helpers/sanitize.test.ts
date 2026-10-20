@@ -5,7 +5,6 @@ import {
   validateMemoryAddress,
   validateFilePath,
   validateTextInput,
-  escapeForScript,
 } from '../../src/helpers/sanitize.js';
 
 describe('validateScriptSource', () => {
@@ -168,39 +167,5 @@ describe('validateTextInput', () => {
     expect(() => validateTextInput(oversized)).toThrow(
       'Text input exceeds maximum length of 4096',
     );
-  });
-});
-
-describe('escapeForScript', () => {
-  it('escapes backslashes', () => {
-    expect(escapeForScript('path\\to\\file')).toBe('path\\\\to\\\\file');
-  });
-
-  it('escapes single quotes', () => {
-    expect(escapeForScript("it's")).toBe("it\\'s");
-  });
-
-  it('escapes newlines', () => {
-    expect(escapeForScript('line1\nline2')).toBe('line1\\nline2');
-  });
-
-  it('escapes carriage returns', () => {
-    expect(escapeForScript('line1\rline2')).toBe('line1\\rline2');
-  });
-
-  it('escapes a combination of special characters', () => {
-    expect(escapeForScript("it's a\nnew\\path\r")).toBe("it\\'s a\\nnew\\\\path\\r");
-  });
-
-  it('prevents script injection via escaped single quotes', () => {
-    const malicious = "'); process.exit(1); ('";
-    const escaped = escapeForScript(malicious);
-    expect(escaped).toBe("\\'); process.exit(1); (\\'");
-    // Every single quote in the output is preceded by a backslash, preventing injection
-    expect(escaped.match(/(?<!\\)'/g)).toBeNull();
-  });
-
-  it('returns empty string unchanged', () => {
-    expect(escapeForScript('')).toBe('');
   });
 });

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError } from '../helpers/errors.js';
@@ -11,13 +12,14 @@ export function registerMessagesTool(server: McpServer): void {
     {
       title: 'Get Script Messages',
       description: 'Retrieve buffered messages from active scripts and hooks. Messages include hook invocations, trace hits, script output (send() calls), and errors. Use "since" for pagination to get only new messages.',
-      inputSchema: {
+      inputSchema: z.object({
         session_id: z.string().describe('Session ID to get messages from'),
         script_id: z.string().optional().describe('Filter to a specific script'),
         since: z.number().optional().describe('Message index to start from (for pagination)'),
         limit: z.number().optional().default(50).describe('Max messages to return (default: 50)'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

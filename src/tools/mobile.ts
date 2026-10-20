@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { MobileMcpUnavailableError, FridaMcpError } from '../helpers/errors.js';
@@ -37,11 +38,12 @@ export function registerMobileTool(server: McpServer): void {
     {
       title: 'Mobile UI Action',
       description: `Gateway to mobile-mcp UI automation tools. Perform screenshots, taps, swipes, text input, app management and more. Common actions: mobile_take_screenshot, mobile_list_elements_on_screen, mobile_click_on_screen_at_coordinates (params: {x, y}), mobile_swipe_on_screen (params: {direction}), mobile_type_keys (params: {text}), mobile_launch_app (params: {appId}), mobile_list_apps. Call without action to see all available actions.`,
-      inputSchema: {
+      inputSchema: z.object({
         action: z.string().optional().describe('mobile-mcp action name (e.g., "mobile_take_screenshot"). Omit to list available actions.'),
-        params: z.record(z.unknown()).optional().describe('Parameters for the action'),
+        params: z.record(z.string(), z.unknown()).optional().describe('Parameters for the action'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

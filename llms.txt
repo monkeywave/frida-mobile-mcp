@@ -1,0 +1,23 @@
+# frida-mobile-mcp
+
+> MCP server for dynamic analysis of Android and iOS apps with Frida 17. 40 tools (explore, hook, trace, execute/validate scripts, SSL pinning bypass, friTap TLS capture, memory, native analysis, device/process/session primitives, mobile-mcp UI gateway), 8 prebuilt scripts, shared `module+0xoffset` address notation and an evidence envelope on every result. npm package `frida-mobile-mcp`, Node >= 20, MIT.
+
+## Start here
+
+- [README](README.md): quick start, requirements (frida-server 17.x), tool tables, configuration, security guardrails, troubleshooting.
+- [Client setup](docs/clients.md): Claude Desktop/Code, Cursor, VS Code, Windsurf, Codex, `setup`/`doctor` commands, HTTP mode, remote frida-server, version matching, environment variables.
+- [Interoperability](docs/interop.md): address notation contract, evidence/error envelope and error codes, `capture_tls` details, static -> dynamic -> static walkthrough with ReVa/IDA/REA.
+- [Agent skill](skills/mobile-dynamic-analysis/SKILL.md): when to use runtime analysis, recommended tool order, guardrail flags, troubleshooting.
+
+## For contributors
+
+- [AGENTS.md](AGENTS.md): build/test commands, Frida 17 rules, repository layout, conventions.
+- [CONTRIBUTING.md](CONTRIBUTING.md): workflow, Conventional Commits, release-please.
+- [SECURITY.md](SECURITY.md): reporting and built-in guardrails.
+- [CHANGELOG.md](CHANGELOG.md): release notes (generated).
+
+## Machine-readable
+
+- [server.json](server.json): MCP registry entry (`io.github.monkeywave/frida-mobile-mcp`).
+- [manifest.json](manifest.json): MCPB manifest for Claude Desktop.
+- [package.json](package.json): scripts, bin `frida-mobile-mcp`, library entry `dist/lib.js`.

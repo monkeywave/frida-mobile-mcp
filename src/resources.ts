@@ -1,11 +1,26 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import frida from 'frida';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ResourceTemplate } from '@modelcontextprotocol/server';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from './device/manager.js';
 import { getState } from './state.js';
 import { getScriptRegistry } from './scripts/registry.js';
 
 const cache = new Map<string, { data: unknown; expiresAt: number }>();
+
+/** Skills shipped with the package (skills/<name>/SKILL.md, resolved from the package root like bridges.ts). */
+const SHIPPED_SKILLS = ['mobile-dynamic-analysis'] as const;
+
+export function getSkillPath(name: string): string {
+  const packageRoot = fileURLToPath(new URL('../', import.meta.url));
+  return path.join(packageRoot, 'skills', name, 'SKILL.md');
+}
+
+export function readSkill(name: string): string {
+  return readFileSync(getSkillPath(name), 'utf8');
+}
 
 function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
   const entry = cache.get(key);
@@ -162,6 +177,22 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
       return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(allMessages) }] };
     }
   );
+
+  // Static: frida://skills/<name> - Agent Skills documents shipped with the package
+  for (const skill of SHIPPED_SKILLS) {
+    server.registerResource(
+      `frida-skill-${skill}`,
+      `frida://skills/${skill}`,
+      { description: `Agent skill: ${skill} (when to use frida-mobile-mcp, static/dynamic hand-off, tool order, troubleshooting)`, mimeType: 'text/markdown' },
+      async (uri) => {
+        try {
+          return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readSkill(skill) }] };
+        } catch (err) {
+          return { contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Skill ${skill} is not available: ${String(err)}` }] };
+        }
+      }
+    );
+  }
 
   // Static: frida://scripts
   server.registerResource(

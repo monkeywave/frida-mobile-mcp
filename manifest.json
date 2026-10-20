@@ -1,0 +1,243 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "frida-mobile-mcp",
+  "display_name": "Frida Mobile MCP",
+  "version": "0.2.3",
+  "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
+  "long_description": "An MCP server that drives Frida dynamic instrumentation on Android and iOS devices. It lets an AI assistant explore apps, hook Java/Objective-C/native methods, trace calls, bypass SSL pinning, inspect memory, run pre-built analysis scripts, and (optionally) automate the device UI through mobile-mcp. A device with frida-server running (or an emulator/jailbroken device) must be reachable from this machine.",
+  "author": {
+    "name": "monkeywave",
+    "url": "https://github.com/monkeywave"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monkeywave/frida-mobile-mcp"
+  },
+  "homepage": "https://github.com/monkeywave/frida-mobile-mcp",
+  "documentation": "https://github.com/monkeywave/frida-mobile-mcp#readme",
+  "support": "https://github.com/monkeywave/frida-mobile-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "frida",
+    "mcp",
+    "mobile",
+    "android",
+    "ios",
+    "security"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {
+        "FRIDA_DEVICE_ID": "${user_config.device_id}",
+        "FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS": "${user_config.allow_custom_scripts}",
+        "FRIDA_MCP_MEMORY_WRITE": "${user_config.allow_memory_write}"
+      }
+    }
+  },
+  "user_config": {
+    "device_id": {
+      "type": "string",
+      "title": "Default Frida device ID",
+      "description": "Optional device ID to use by default (e.g. emulator-5554 or a USB serial). Leave empty to auto-select / use the local device.",
+      "required": false,
+      "default": ""
+    },
+    "allow_custom_scripts": {
+      "type": "boolean",
+      "title": "Allow custom Frida scripts",
+      "description": "Allow the assistant to execute arbitrary Frida JavaScript (execute_script, custom hook_function handlers). Only enable for trusted analysis sessions.",
+      "required": false,
+      "default": false
+    },
+    "allow_memory_write": {
+      "type": "boolean",
+      "title": "Allow memory writes",
+      "description": "Enable the write_memory tool, which patches process memory on the target device.",
+      "required": false,
+      "default": false
+    }
+  },
+  "tools": [
+    {
+      "name": "get_status",
+      "description": "Get an overview of connected devices, active sessions (with platform, script count and last activity), hooks, traces, and the most recent session detaches / process crashes (recent_detaches)"
+    },
+    {
+      "name": "frida_help",
+      "description": "Get help on how to use frida-mobile-mcp tools"
+    },
+    {
+      "name": "explore_app",
+      "description": "Launch a mobile app and gather comprehensive initial context including loaded classes, modules, and libraries"
+    },
+    {
+      "name": "hook_method",
+      "description": "Hook a method to intercept calls with auto device/session management"
+    },
+    {
+      "name": "trace_method",
+      "description": "Trace function calls matching a pattern for a specified duration"
+    },
+    {
+      "name": "execute_script",
+      "description": "Execute a custom Frida JavaScript/TypeScript script in a target process (Frida 17 agent)"
+    },
+    {
+      "name": "run_prebuilt_script",
+      "description": "Run a pre-built Frida script from the built-in library"
+    },
+    {
+      "name": "search_classes_and_methods",
+      "description": "Search for classes and their methods by pattern in a running app"
+    },
+    {
+      "name": "read_memory",
+      "description": "Read raw memory from a target process"
+    },
+    {
+      "name": "write_memory",
+      "description": "Write raw bytes to process memory"
+    },
+    {
+      "name": "scan_memory",
+      "description": "Scan process memory for a byte pattern"
+    },
+    {
+      "name": "bypass_ssl_pinning",
+      "description": "One-click SSL certificate pinning bypass for the target app"
+    },
+    {
+      "name": "capture_tls",
+      "description": "Capture TLS session keys (NSS key log format) and decrypted plaintext from the target using the friTap agent (OpenSSL/BoringSSL, Conscrypt, NSS, GnuTLS, wolfSSL, mbedTLS, Secure Transport, ...)"
+    },
+    {
+      "name": "get_messages",
+      "description": "Retrieve buffered messages from active scripts and hooks"
+    },
+    {
+      "name": "stop_instrumentation",
+      "description": "Clean up all hooks, scripts, and traces on a target"
+    },
+    {
+      "name": "unload_script",
+      "description": "Unload a single script (hook, trace or custom script) from a session while keeping the session attached"
+    },
+    {
+      "name": "mobile_action",
+      "description": "Gateway to mobile-mcp UI automation tools"
+    },
+    {
+      "name": "detect_app_technologies",
+      "description": "Detect what libraries, frameworks, and security mechanisms an app uses"
+    },
+    {
+      "name": "validate_script",
+      "description": "Check a Frida script for syntax, type and Frida 17 API problems without a device"
+    },
+    {
+      "name": "list_devices",
+      "description": "Enumerate all Frida-visible devices including local, USB, and remote devices"
+    },
+    {
+      "name": "select_device",
+      "description": "Explicitly select the active Frida device for subsequent operations."
+    },
+    {
+      "name": "get_device_info",
+      "description": "Get detailed information about a device including OS version, architecture, and system parameters."
+    },
+    {
+      "name": "list_processes",
+      "description": "List running processes on the target device"
+    },
+    {
+      "name": "list_applications",
+      "description": "List installed and running applications on the target device."
+    },
+    {
+      "name": "get_frontmost_application",
+      "description": "Get the currently foreground application on the device."
+    },
+    {
+      "name": "spawn_process",
+      "description": "Spawn a new process in suspended state for early instrumentation"
+    },
+    {
+      "name": "attach_process",
+      "description": "Attach to an already running process by PID or name."
+    },
+    {
+      "name": "resume_process",
+      "description": "Resume a suspended process (after spawn_process)."
+    },
+    {
+      "name": "kill_process",
+      "description": "Kill a process on the target device."
+    },
+    {
+      "name": "detach_session",
+      "description": "Detach from a specific Frida session, unloading all scripts."
+    },
+    {
+      "name": "list_sessions",
+      "description": "List all active Frida sessions managed by this server."
+    },
+    {
+      "name": "enumerate_modules",
+      "description": "List loaded modules (shared libraries) in the target process with name, base, end (base+size), size and path"
+    },
+    {
+      "name": "enumerate_exports",
+      "description": "List exports (functions and variables) of a specific module, paginated with offset/limit"
+    },
+    {
+      "name": "enumerate_imports",
+      "description": "List imports of a specific module (functions it calls in other libraries), paginated with offset/limit"
+    },
+    {
+      "name": "enumerate_symbols",
+      "description": "List symbols (including non-exported/debug symbols) of a specific module"
+    },
+    {
+      "name": "hook_function",
+      "description": "Low-level hook with custom onEnter/onLeave JavaScript handlers"
+    },
+    {
+      "name": "unhook_function",
+      "description": "Remove a specific hook by its hook ID."
+    },
+    {
+      "name": "resolve_address",
+      "description": "Translate between absolute process addresses and static-analysis coordinates"
+    },
+    {
+      "name": "analyze_native_function",
+      "description": "Static-style analysis of a native function at runtime: function range (Process.findFunctionRange), basic blocks and edges (Frida 17.12+ ControlFlowGraph; falls back to linear disassembly until the fir"
+    },
+    {
+      "name": "dump_module_memory",
+      "description": "Dump a loaded module from process memory to a file on the host (e.g"
+    },
+    {
+      "name": "list_threads",
+      "description": "List the threads of the target process (id, name, state, current pc as module+0xoffset)"
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

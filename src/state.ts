@@ -9,16 +9,32 @@ import type {
   ScriptEntry,
   MessageEntry,
   SessionContext,
+  DetachRecord,
+  CrashSummary,
 } from './types.js';
 
+const MAX_RECENT_DETACHES = 20;
+const CLEANUP_INTERVAL_MS = 60_000;
+
 class ServerState {
+  /** Platform per device id, filled by DeviceManager.detectPlatform(). */
+  readonly devicePlatforms = new Map<string, string>();
+
+  setDevicePlatform(deviceId: string, platform: string): void {
+    this.devicePlatforms.set(deviceId, platform);
+  }
+
   deviceManager: frida.DeviceManager;
   selectedDevice: frida.Device | null = null;
   sessions: Map<string, SessionEntry> = new Map();
   hooks: Map<string, HookEntry> = new Map();
   traces: Map<string, TraceEntry> = new Map();
   config: FridaMcpConfig;
+  /** Ring buffer (newest last) of recent session detaches and process crashes. */
+  recentDetaches: DetachRecord[] = [];
   private lastCleanupAt: number = 0;
+  private cleanupTimer: NodeJS.Timeout | null = null;
+  private crashWatchedDevices: Set<string> = new Set();
 
   constructor(config: FridaMcpConfig) {
     this.deviceManager = frida.getDeviceManager();
@@ -29,12 +45,20 @@ class ServerState {
     return randomUUID();
   }
 
-  addSession(entry: SessionEntry): void {
+  /** Throws when no further session can be created. Call BEFORE spawning/attaching. */
+  ensureSessionCapacity(): void {
     if (this.sessions.size >= this.config.maxSessions) {
       throw new Error(
         `Maximum session limit reached (${this.config.maxSessions}). ` +
         `Use stop_instrumentation to clean up existing sessions.`
       );
+    }
+  }
+
+  addSession(entry: SessionEntry): void {
+    this.ensureSessionCapacity();
+    if (entry.lastActivityAt === undefined) {
+      entry.lastActivityAt = entry.createdAt;
     }
     this.sessions.set(entry.id, entry);
   }
@@ -43,22 +67,44 @@ class ServerState {
     return this.sessions.get(sessionId);
   }
 
-  removeSession(sessionId: string): void {
+  /** Mark a session as recently used so idle expiry is based on real activity. */
+  touchSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      // Clean up associated hooks
-      for (const [hookId, hook] of this.hooks) {
-        if (hook.sessionId === sessionId) {
-          this.hooks.delete(hookId);
-        }
+      session.lastActivityAt = Date.now();
+    }
+  }
+
+  /**
+   * Remove a session and everything that belongs to it.
+   * The session, its hooks and traces are dropped from the maps synchronously so
+   * callers that do not await see a consistent state; the scripts are unloaded
+   * best-effort and the returned promise resolves once that has been attempted.
+   */
+  removeSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return Promise.resolve();
+
+    this.sessions.delete(sessionId);
+    this.dropHooksForSession(sessionId);
+    this.dropTracesForSession(sessionId);
+
+    return unloadScripts(session);
+  }
+
+  private dropHooksForSession(sessionId: string): void {
+    for (const [hookId, hook] of this.hooks) {
+      if (hook.sessionId === sessionId) {
+        this.hooks.delete(hookId);
       }
-      // Clean up associated traces
-      for (const [traceId, trace] of this.traces) {
-        if (trace.sessionId === sessionId) {
-          this.traces.delete(traceId);
-        }
+    }
+  }
+
+  private dropTracesForSession(sessionId: string): void {
+    for (const [traceId, trace] of this.traces) {
+      if (trace.sessionId === sessionId) {
+        this.traces.delete(traceId);
       }
-      this.sessions.delete(sessionId);
     }
   }
 
@@ -68,8 +114,9 @@ class ServerState {
     const script = session.scripts.get(scriptId);
     if (!script) return;
 
-    const index = script.messages.length;
+    const index = nextMessageIndex(script);
     script.messages.push({ ...message, index });
+    session.lastActivityAt = Date.now();
 
     // Batch eviction: trim when 10% over limit to avoid splice on every message
     const evictionThreshold = Math.floor(this.config.maxMessageBuffer * 1.1);
@@ -87,14 +134,65 @@ class ServerState {
     return undefined;
   }
 
+  findSessionByPid(deviceId: string, pid: number): SessionEntry | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.deviceId === deviceId && session.pid === pid) {
+        return session;
+      }
+    }
+    return undefined;
+  }
+
+  /** Append a detach/crash record to the bounded ring buffer. */
+  recordDetach(record: DetachRecord): void {
+    this.recentDetaches.push(record);
+    if (this.recentDetaches.length > MAX_RECENT_DETACHES) {
+      this.recentDetaches.splice(0, this.recentDetaches.length - MAX_RECENT_DETACHES);
+    }
+  }
+
+  /** Record a crash reported by `device.processCrashed` and annotate the matching session. */
+  recordCrash(deviceId: string, crash: CrashSummary): void {
+    const session = this.findSessionByPid(deviceId, crash.pid);
+    if (session) {
+      session.crash = crash;
+    }
+    this.recordDetach({
+      sessionId: session?.id ?? null,
+      target: session?.target ?? crash.processName,
+      pid: crash.pid,
+      deviceId,
+      reason: 'process-crashed',
+      crash,
+      timestamp: Date.now(),
+    });
+    log('warn', `Process ${crash.processName} (PID ${crash.pid}) crashed on ${deviceId}: ${crash.summary}`);
+  }
+
+  /** Subscribe to `processCrashed` exactly once per device. */
+  watchDeviceCrashes(device: frida.Device): void {
+    if (this.crashWatchedDevices.has(device.id)) return;
+    this.crashWatchedDevices.add(device.id);
+    try {
+      device.processCrashed.connect((crash: frida.Crash) => {
+        const summary = toCrashSummary(crash);
+        if (summary) this.recordCrash(device.id, summary);
+      });
+    } catch (err) {
+      this.crashWatchedDevices.delete(device.id);
+      log('debug', `Could not subscribe to crash events on ${device.id}: ${String(err)}`);
+    }
+  }
+
   getSessionContext(): SessionContext {
-    this.cleanupExpiredSessions();
+    this.cleanupExpiredSessions().catch(() => { /* best-effort */ });
+    const lastDetach = this.recentDetaches[this.recentDetaches.length - 1];
     return {
       device: this.selectedDevice
         ? `${this.selectedDevice.name} (${this.selectedDevice.type}:${this.selectedDevice.id})`
         : null,
       platform: this.selectedDevice
-        ? detectPlatform(this.selectedDevice)
+        ? (this.devicePlatforms.get(this.selectedDevice.id) ?? detectPlatform(this.selectedDevice))
         : null,
       active_sessions: Array.from(this.sessions.values()).map((s) => ({
         id: s.id,
@@ -106,45 +204,105 @@ class ServerState {
         (count, s) => count + s.scripts.size,
         0
       ),
+      last_detach: lastDetach
+        ? {
+            target: lastDetach.target,
+            reason: lastDetach.reason,
+            crash_summary: lastDetach.crash?.summary ?? null,
+            timestamp: lastDetach.timestamp,
+          }
+        : null,
     };
   }
 
-  cleanupExpiredSessions(): void {
+  /** Start the periodic expiry sweep (idempotent; the timer never keeps the process alive). */
+  startCleanupTimer(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupExpiredSessions().catch((err) => {
+        log('debug', `Session expiry sweep failed: ${String(err)}`);
+      });
+    }, CLEANUP_INTERVAL_MS);
+    this.cleanupTimer.unref();
+  }
+
+  stopCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+  }
+
+  /**
+   * Detach sessions that have been idle longer than `sessionTimeoutMinutes`.
+   * Throttled to at most once per minute; pass `force` to bypass the throttle.
+   */
+  async cleanupExpiredSessions(force = false): Promise<void> {
     const now = Date.now();
-    if (now - this.lastCleanupAt < 60_000) return; // At most once per minute
+    if (!force && now - this.lastCleanupAt < CLEANUP_INTERVAL_MS) return;
     this.lastCleanupAt = now;
 
     const timeoutMs = this.config.sessionTimeoutMinutes * 60 * 1000;
     if (timeoutMs <= 0) return;
 
     for (const [id, entry] of this.sessions) {
-      if (now - entry.createdAt > timeoutMs) {
-        log('info', `Session ${id} expired (target: ${entry.target})`);
-        // Best-effort cleanup
-        for (const scriptEntry of entry.scripts.values()) {
-          try { scriptEntry.script.unload(); } catch { /* ignore */ }
-        }
-        try { entry.session.detach(); } catch { /* ignore */ }
-        this.removeSession(id);
+      const lastActivity = entry.lastActivityAt ?? entry.createdAt;
+      if (now - lastActivity <= timeoutMs) continue;
+
+      log('info', `Session ${id} expired (target: ${entry.target})`);
+      try {
+        await this.removeSession(id);
+        await entry.session.detach();
+      } catch (err) {
+        log('debug', `Error while expiring session ${id}: ${String(err)}`);
       }
     }
   }
 
   async cleanup(): Promise<void> {
+    this.stopCleanupTimer();
+
     for (const [sessionId, entry] of this.sessions) {
       try {
-        for (const scriptEntry of entry.scripts.values()) {
-          try {
-            await scriptEntry.script.unload();
-          } catch { /* ignore */ }
-        }
+        await unloadScripts(entry);
         await entry.session.detach();
       } catch { /* ignore */ }
       this.sessions.delete(sessionId);
     }
     this.hooks.clear();
     this.traces.clear();
+
+    try {
+      const { disconnectMobileMcp } = await import('./mobile-mcp/client.js');
+      await disconnectMobileMcp();
+    } catch { /* mobile-mcp may never have been started */ }
   }
+}
+
+/** Monotonic per-script message index that survives buffer trimming. */
+function nextMessageIndex(script: ScriptEntry): number {
+  const index = script.nextMessageIndex ?? script.messages.length;
+  script.nextMessageIndex = index + 1;
+  return index;
+}
+
+async function unloadScripts(entry: SessionEntry): Promise<void> {
+  for (const scriptEntry of entry.scripts.values()) {
+    try {
+      if (scriptEntry.script.isDestroyed) continue;
+      await scriptEntry.script.unload();
+    } catch { /* script may already be unloaded or the process may be gone */ }
+  }
+}
+
+export function toCrashSummary(crash: frida.Crash | null | undefined): CrashSummary | null {
+  if (!crash) return null;
+  return {
+    pid: crash.pid,
+    processName: crash.processName,
+    summary: crash.summary,
+    report: crash.report,
+  };
 }
 
 function detectPlatform(device: frida.Device): string | null {
@@ -158,7 +316,11 @@ function detectPlatform(device: frida.Device): string | null {
 let stateInstance: ServerState | null = null;
 
 export function initState(config: FridaMcpConfig): ServerState {
+  if (stateInstance) {
+    stateInstance.stopCleanupTimer();
+  }
   stateInstance = new ServerState(config);
+  stateInstance.startCleanupTimer();
   return stateInstance;
 }
 

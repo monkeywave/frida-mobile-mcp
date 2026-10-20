@@ -1,23 +1,36 @@
+import { randomUUID } from 'node:crypto';
 import { encode as encodeToon } from '@toon-format/toon';
-import type { ToolResult, SuggestedAction, SessionContext, ErrorResponse } from '../types.js';
+import type { ToolResult, SuggestedAction, ErrorResponse, EvidenceMeta } from '../types.js';
 import { getState } from '../state.js';
 import { FridaMcpError } from './errors.js';
-import { CHARACTER_LIMIT, ResponseFormat } from '../constants.js';
+import { getCharacterLimit, ResponseFormat } from '../constants.js';
 
 const MAX_MARKDOWN_DEPTH = 10;
 const keyCache = new Map<string, string>();
 const INDENTS = Array.from({ length: MAX_MARKDOWN_DEPTH + 1 }, (_, i) => '  '.repeat(i));
 
+/**
+ * Wrap a tool result in the standard envelope. Every result carries an `evidence_id`,
+ * `limitations` (default none) and `coverage` (default unknown) so downstream agents can
+ * cite it next to static-analysis evidence. Pass `meta.coverage = { status: 'complete' }`
+ * when the tool knows it returned everything.
+ */
 export function buildResult<T>(
   result: T,
-  suggestedNext: SuggestedAction[] = []
+  suggestedNext: SuggestedAction[] = [],
+  meta: EvidenceMeta = {}
 ): ToolResult<T> {
   const state = getState();
-  return {
+  const envelope: ToolResult<T> = {
     result,
     session_context: state.getSessionContext(),
     suggested_next: suggestedNext,
+    evidence_id: randomUUID(),
+    limitations: meta.limitations ? [...meta.limitations] : [],
+    coverage: meta.coverage ? { ...meta.coverage } : { status: 'unknown' },
   };
+  if (meta.raw_result !== undefined) envelope.raw_result = meta.raw_result;
+  return envelope;
 }
 
 export function buildErrorResult(error: FridaMcpError): ErrorResponse {
@@ -41,8 +54,9 @@ export function formatToolResponse(
 
   let text = renderText(result, format);
 
-  if (text.length > CHARACTER_LIMIT) {
-    text = text.slice(0, CHARACTER_LIMIT) +
+  const limit = getCharacterLimit();
+  if (text.length > limit) {
+    text = text.slice(0, limit) +
       '\n\n_...response truncated. Use pagination parameters (limit, offset/since) or switch to `response_format: "json"` for full data._';
   }
 
@@ -69,10 +83,13 @@ function renderText(data: ToolResult | ErrorResponse, format: ResponseFormat): s
 
 function formatErrorAsMarkdown(err: ErrorResponse): string {
   const lines: string[] = [
-    `**Error**: ${err.error.code}`,
+    `**Error**: ${err.error.code} (${err.error.category}${err.error.retryable ? ', retryable' : ''})`,
     '',
     err.error.message,
   ];
+  if (err.error.remediation) {
+    lines.push('', `**Remediation**: ${err.error.remediation}`);
+  }
   if (err.error.recovery_actions?.length) {
     lines.push('', '**Recovery options:**');
     for (const a of err.error.recovery_actions) {
@@ -84,10 +101,19 @@ function formatErrorAsMarkdown(err: ErrorResponse): string {
 }
 
 function resultToMarkdown(toolResult: ToolResult): string {
-  const { result, session_context, suggested_next } = toolResult;
+  const { result, session_context, suggested_next, limitations, coverage, evidence_id } = toolResult;
   const lines: string[] = [];
 
   formatObject(result as Record<string, unknown>, lines, 0);
+
+  if (limitations?.length) {
+    lines.push('', '**Limitations:**');
+    for (const limitation of limitations) lines.push(`- ${limitation}`);
+  }
+  const evidenceParts: string[] = [];
+  if (evidence_id) evidenceParts.push(`evidence: ${evidence_id}`);
+  if (coverage) evidenceParts.push(`coverage: ${coverage.status}${coverage.note ? ` (${coverage.note})` : ''}`);
+  if (evidenceParts.length > 0) lines.push('', `_${evidenceParts.join(' | ')}_`);
 
   if (session_context) {
     const ctx = session_context;

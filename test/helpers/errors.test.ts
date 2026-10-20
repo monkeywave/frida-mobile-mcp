@@ -9,6 +9,7 @@ import {
   MemoryWriteDisabledError,
   MobileMcpUnavailableError,
   RateLimitError,
+  FritapAgentUnavailableError,
   wrapFridaError,
 } from '../../src/helpers/errors.js';
 
@@ -77,5 +78,73 @@ describe('wrapFridaError', () => {
   it('classifies device not found errors', () => {
     const wrapped = wrapFridaError(new Error('unable to find device with id'));
     expect(wrapped.code).toBe('DEVICE_NOT_FOUND');
+  });
+});
+
+describe('Error envelope classification (REA/ReVa conventions)', () => {
+  it('maps RATE_LIMIT_EXCEEDED to resource and retryable', () => {
+    const res = new RateLimitError('script', 10).toErrorResponse();
+    expect(res.error.category).toBe('resource');
+    expect(res.error.retryable).toBe(true);
+    expect(res.error.remediation).toContain('retry');
+    expect(res.error.recovery_actions.length).toBeGreaterThan(0);
+  });
+
+  it('maps CUSTOM_SCRIPTS_DISABLED to authorization with remediation text', () => {
+    const res = new CustomScriptDisabledError().toErrorResponse();
+    expect(res.error.category).toBe('authorization');
+    expect(res.error.retryable).toBe(false);
+    expect(res.error.remediation).toContain('allowCustomScripts');
+  });
+
+  it('maps DEVICE_NOT_FOUND to capability', () => {
+    const res = new DeviceNotFoundError('usb').toErrorResponse();
+    expect(res.error.category).toBe('capability');
+    expect(res.error.retryable).toBe(false);
+  });
+
+  it('maps timeouts to timeout/retryable', () => {
+    expect(new FridaMcpError('RPC_TIMEOUT', 'x').category).toBe('timeout');
+    expect(new FridaMcpError('RPC_TIMEOUT', 'x').retryable).toBe(true);
+    expect(new FridaMcpError('FRIDA_TIMEOUT', 'x').category).toBe('timeout');
+    expect(new FridaMcpError('FRIDA_TIMEOUT', 'x').retryable).toBe(true);
+  });
+
+  it('maps SESSION_NOT_FOUND and INVALID_ARGUMENT to request', () => {
+    expect(new FridaMcpError('SESSION_NOT_FOUND', 'x').category).toBe('request');
+    expect(new FridaMcpError('INVALID_ARGUMENT', 'x').category).toBe('request');
+  });
+
+  it('falls back to provider for unknown codes', () => {
+    const err = new FridaMcpError('SOMETHING_ELSE', 'x');
+    expect(err.category).toBe('provider');
+    expect(err.retryable).toBe(false);
+  });
+
+  it('derives remediation from a user_intervention recovery action', () => {
+    const err = new MemoryWriteDisabledError();
+    expect(err.remediation).toContain('memoryWriteEnabled');
+    expect(err.toErrorResponse().error.remediation).toContain('memoryWriteEnabled');
+  });
+
+  it('accepts explicit overrides', () => {
+    const err = new FridaMcpError('FRIDA_ERROR', 'x', [], {}, { category: 'timeout', retryable: true, remediation: 'retry' });
+    const res = err.toErrorResponse();
+    expect(res.error.category).toBe('timeout');
+    expect(res.error.retryable).toBe(true);
+    expect(res.error.remediation).toBe('retry');
+  });
+
+  it('omits remediation when none is known', () => {
+    const res = new FridaMcpError('FRIDA_ERROR', 'x').toErrorResponse();
+    expect('remediation' in res.error).toBe(false);
+  });
+
+  it('FritapAgentUnavailableError is a capability error with pip remediation', () => {
+    const err = new FritapAgentUnavailableError('not installed', ['/a', '/b']);
+    expect(err.code).toBe('FRITAP_AGENT_UNAVAILABLE');
+    expect(err.category).toBe('capability');
+    expect(err.remediation).toContain('pip install friTap');
+    expect(err.context.searched).toEqual(['/a', '/b']);
   });
 });

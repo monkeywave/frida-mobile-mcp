@@ -10,6 +10,14 @@ export interface SessionEntry {
   platform: 'android' | 'ios' | 'linux' | 'macos' | 'windows' | 'unknown';
   scripts: Map<string, ScriptEntry>;
   createdAt: number;
+  lastActivityAt?: number;  // updated on message receipt and on every tool use (state.touchSession)
+  device?: frida.Device;    // cached frida.Device the session lives on
+  detachReason?: string;    // set by the detach handler right before removal
+  crash?: CrashSummary;     // set by the detach handler when frida reports a crash
+  /** Script-runtime snapshots keyed by snapshotCacheKey() (src/agent/snapshots.ts); never retried once created. */
+  snapshots?: Map<string, Buffer>;
+  /** Snapshot cache keys whose creation failed on this session (unsupported runtime etc.); not retried. */
+  snapshotFailures?: Set<string>;
 }
 
 export interface ScriptEntry {
@@ -19,6 +27,26 @@ export interface ScriptEntry {
   name?: string;
   persistent: boolean;      // whether script stays loaded
   createdAt: number;
+  nextMessageIndex?: number; // monotonic per-script counter (survives buffer trimming)
+}
+
+// Crash information as reported by frida (device.processCrashed / session.detached)
+export interface CrashSummary {
+  pid: number;
+  processName: string;
+  summary: string;
+  report?: string;
+}
+
+// Record of a session detach or a process crash, kept in state.recentDetaches
+export interface DetachRecord {
+  sessionId: string | null;  // null for crashes not tied to a known session
+  target: string;
+  pid: number;
+  deviceId: string;
+  reason: string;            // SessionDetachReason string or 'process-crashed'
+  crash: CrashSummary | null;
+  timestamp: number;
 }
 
 export interface MessageEntry {
@@ -57,11 +85,33 @@ export interface TraceEntry {
   startedAt: number;
 }
 
-// Tool return value structure
+// Tool return value structure.
+// evidence_id / limitations / coverage follow the REA/ReVa evidence conventions so that
+// results from this server can be cited next to static-analysis findings.
 export interface ToolResult<T = unknown> {
   result: T;
   session_context: SessionContext;
   suggested_next: SuggestedAction[];
+  /** Unique id (uuid) for this tool invocation's evidence; always set by buildResult. */
+  evidence_id?: string;
+  /** Known gaps of this result (truncation, filtered output, unsupported platform ...). */
+  limitations?: string[];
+  /** Whether the result is known to be complete or coverage is unknown. */
+  coverage?: EvidenceCoverage;
+  /** Optional raw provider output when the caller wants to keep the unprocessed data. */
+  raw_result?: unknown;
+}
+
+export interface EvidenceCoverage {
+  status: 'complete' | 'unknown';
+  note?: string;
+}
+
+/** Options accepted by buildResult's third argument. */
+export interface EvidenceMeta {
+  limitations?: string[];
+  coverage?: EvidenceCoverage;
+  raw_result?: unknown;
 }
 
 export interface SessionContext {
@@ -74,6 +124,12 @@ export interface SessionContext {
   }>;
   active_hooks: number;
   active_scripts: number;
+  last_detach?: {
+    target: string;
+    reason: string;
+    crash_summary: string | null;
+    timestamp: number;
+  } | null;
 }
 
 export interface SuggestedAction {
@@ -85,10 +141,15 @@ export interface SuggestedAction {
 }
 
 // Error types
+export type ErrorCategory = 'request' | 'authorization' | 'capability' | 'timeout' | 'resource' | 'provider';
+
 export interface ErrorResponse {
   error: {
     code: string;
+    category: ErrorCategory;
     message: string;
+    retryable: boolean;
+    remediation?: string;
     recovery_actions: RecoveryAction[];
     context?: Record<string, unknown>;
   };
@@ -150,6 +211,12 @@ export interface FridaMcpConfig {
   auditLogPath: string;
   mobileMcp: MobileMcpConfig;
   rateLimits: RateLimitConfig;
+  /**
+   * Pre-warm a script-runtime snapshot of the preamble + bridges per session so the ~300 KB
+   * Java/ObjC bridge is not re-sent and re-evaluated for every script. Requires the V8 runtime
+   * (`FRIDA_MCP_RUNTIME=v8`); QuickJS cannot snapshot. Env: `FRIDA_MCP_SNAPSHOTS=0|1`.
+   */
+  snapshots?: boolean;
 }
 
 export interface MobileMcpConfig {

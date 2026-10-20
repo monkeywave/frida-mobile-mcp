@@ -59,20 +59,22 @@ describe('ScriptRegistry', () => {
     }
   });
 
-  it('ssl_pinning_bypass generates different output for android/ios options', () => {
+  it('ssl_pinning_bypass generates the same universal script for android/ios options', () => {
     const template = registry.get('ssl_pinning_bypass')!;
     const android = template.generate({ platform: 'android' });
     const ios = template.generate({ platform: 'ios' });
-    // Both should be the same universal script (handles both)
-    expect(android).toBe(ios); // Current impl is universal
+    expect(android).toBe(ios);
     expect(android).toContain('Java.perform');
     expect(android).toContain('ObjC');
   });
 
-  it('class_enumeration accepts filter option', () => {
+  it('class_enumeration declares filter/limit options and reads them at runtime', () => {
     const template = registry.get('class_enumeration')!;
+    expect(template.options).toHaveProperty('filter');
+    expect(template.options).toHaveProperty('limit');
     const source = template.generate({ filter: 'com\\.example\\..*', limit: 100 });
-    expect(source).toContain('com\\\\.example\\\\..*');
-    expect(source).toContain('100');
+    expect(source).toBe(template.generate({}));
+    expect(source).toContain('o.filter');
+    expect(source).toContain('o.limit');
   });
 });

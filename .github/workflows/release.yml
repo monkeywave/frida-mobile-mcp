@@ -5,15 +5,58 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Runs in the same workflow as release-please because tags created with
+  # GITHUB_TOKEN do not trigger other workflows (so an `on: push: tags` publish
+  # workflow would never fire). Authenticates to npm via OIDC trusted publishing
+  # (no NPM_TOKEN secret); configure the trusted publisher for this repo and
+  # workflow file in the npm package settings.
+  publish:
+    name: Publish to npm
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1.
+      - run: npm install -g npm@latest
+
+      - run: npm --version
+
+      - run: npm ci --foreground-scripts
+
+      - run: npm run build
+
+      - run: npm test
+
+      - run: npm publish --provenance --access public

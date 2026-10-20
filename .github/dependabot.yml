@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # frida's native runtime and the bundled bridges must move together:
+      # the bridge packages target a specific Frida major version.
+      frida:
+        patterns:
+          - frida
+          - frida-java-bridge
+          - frida-objc-bridge
+      modelcontextprotocol:
+        patterns:
+          - '@modelcontextprotocol/*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

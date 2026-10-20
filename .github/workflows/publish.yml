@@ -1,32 +1,54 @@
-name: Publish to npm
+# Manual fallback only.
+#
+# Normal releases are published automatically by the `publish` job in
+# release.yml right after release-please creates a GitHub release. Use this
+# workflow (Actions -> "Publish to npm (manual)" -> Run workflow) only when
+# that job failed or a tag needs to be (re-)published by hand.
+#
+# Authentication uses npm trusted publishing (OIDC) - there is no NPM_TOKEN.
+# The trusted publisher configured on npmjs.com must list this workflow file
+# (publish.yml) in addition to release.yml.
+name: Publish to npm (manual)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+    inputs:
+      ref:
+        description: Git ref to publish (tag such as v1.2.3, or a branch/SHA)
+        required: true
+        default: main
+        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
 
-      - run: npm ci
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1.
+      - run: npm install -g npm@latest
+
+      - run: npm --version
+
+      - run: npm ci --foreground-scripts
 
       - run: npm run build
 
       - run: npm test
 
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

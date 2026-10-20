@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../../device/manager.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
@@ -15,11 +16,12 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     {
       title: 'Spawn Process',
       description: 'Spawn a new process in suspended state for early instrumentation. The process will be paused until resume_process is called.',
-      inputSchema: {
+      inputSchema: z.object({
         program: z.string().describe('App bundle ID or program path'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -77,11 +79,12 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     {
       title: 'Attach to Process',
       description: 'Attach to an already running process by PID or name.',
-      inputSchema: {
+      inputSchema: z.object({
         target: z.union([z.string(), z.number()]).describe('PID (number) or process name (string)'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -151,11 +154,12 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     {
       title: 'Resume Process',
       description: 'Resume a suspended process (after spawn_process).',
-      inputSchema: {
+      inputSchema: z.object({
         pid: z.number().describe('Process ID to resume'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -185,11 +189,12 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     {
       title: 'Kill Process',
       description: 'Kill a process on the target device.',
-      inputSchema: {
+      inputSchema: z.object({
         pid: z.number().describe('Process ID to kill'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -217,10 +222,11 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     {
       title: 'Detach Session',
       description: 'Detach from a specific Frida session, unloading all scripts.',
-      inputSchema: {
+      inputSchema: z.object({
         session_id: z.string().describe('Session ID to detach'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -248,9 +254,10 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     {
       title: 'List Sessions',
       description: 'List all active Frida sessions managed by this server.',
-      inputSchema: {
+      inputSchema: z.object({
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

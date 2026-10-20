@@ -1,0 +1,251 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`preamble snapshots (preamble portion only) > android 1`] = `
+"// === frida-mobile-mcp agent preamble ===
+globalThis.__FRIDA_MCP__ = {"name":"snapshot:android","platform":"android","options":{"example":true}};
+if (typeof ObjC === 'undefined') { Object.defineProperty(globalThis, 'ObjC', { value: { available: false }, writable: true, configurable: true }); }
+
+var _hookStats = { attempted: 0, installed: 0, skipped: 0, errors: [] };
+
+function findExport(lib, name) {
+  try {
+    if (lib === null || lib === undefined || lib === '') {
+      return Module.findGlobalExportByName(name);
+    }
+    var mod = Process.findModuleByName(lib);
+    if (mod === null) return null;
+    return mod.findExportByName(name);
+  } catch (e) {
+    return null;
+  }
+}
+
+function hookNative(lib, name, callbacks, options) {
+  _hookStats.attempted++;
+  try {
+    var addr = findExport(lib, name);
+    if (addr) {
+      Interceptor.attach(options ? Object.assign({}, options, { target: addr }) : addr, callbacks);
+      _hookStats.installed++;
+      return true;
+    }
+    _hookStats.skipped++;
+    return false;
+  } catch (e) {
+    _hookStats.skipped++;
+    _hookStats.errors.push({ target: (lib || '*') + '!' + name, error: String(e && e.message ? e.message : e) });
+    return false;
+  }
+}
+
+function recordHookError(target, e) {
+  _hookStats.errors.push({ target: String(target), error: String(e && e.message ? e.message : e) });
+}
+
+function objcClassNames() {
+  if (typeof ObjC === 'undefined' || !ObjC.available) return [];
+  var byModule = ObjC.enumerateLoadedClassesSync();
+  var names = [];
+  for (var modulePath in byModule) {
+    var list = byModule[modulePath];
+    for (var i = 0; i < list.length; i++) names.push(list[i]);
+  }
+  return names;
+}
+
+function javaPerform(fn) {
+  return new Promise(function (resolve, reject) {
+    if (typeof Java === 'undefined' || !Java.available) {
+      reject(new Error('Java runtime not available in this process'));
+      return;
+    }
+    try {
+      Java.perform(function () {
+        try { resolve(fn()); } catch (e) { reject(e); }
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function reportSummary(scriptName) {
+  send({
+    status: 'init_complete',
+    script: scriptName || __FRIDA_MCP__.name,
+    hooks_attempted: _hookStats.attempted,
+    hooks_installed: _hookStats.installed,
+    hooks_skipped: _hookStats.skipped,
+    hook_errors: _hookStats.errors.slice(0, 50)
+  });
+}
+
+// === end preamble ==="
+`;
+
+exports[`preamble snapshots (preamble portion only) > ios 1`] = `
+"// === frida-mobile-mcp agent preamble ===
+globalThis.__FRIDA_MCP__ = {"name":"snapshot:ios","platform":"ios","options":{"example":true}};
+if (typeof Java === 'undefined') { Object.defineProperty(globalThis, 'Java', { value: { available: false }, writable: true, configurable: true }); }
+
+var _hookStats = { attempted: 0, installed: 0, skipped: 0, errors: [] };
+
+function findExport(lib, name) {
+  try {
+    if (lib === null || lib === undefined || lib === '') {
+      return Module.findGlobalExportByName(name);
+    }
+    var mod = Process.findModuleByName(lib);
+    if (mod === null) return null;
+    return mod.findExportByName(name);
+  } catch (e) {
+    return null;
+  }
+}
+
+function hookNative(lib, name, callbacks, options) {
+  _hookStats.attempted++;
+  try {
+    var addr = findExport(lib, name);
+    if (addr) {
+      Interceptor.attach(options ? Object.assign({}, options, { target: addr }) : addr, callbacks);
+      _hookStats.installed++;
+      return true;
+    }
+    _hookStats.skipped++;
+    return false;
+  } catch (e) {
+    _hookStats.skipped++;
+    _hookStats.errors.push({ target: (lib || '*') + '!' + name, error: String(e && e.message ? e.message : e) });
+    return false;
+  }
+}
+
+function recordHookError(target, e) {
+  _hookStats.errors.push({ target: String(target), error: String(e && e.message ? e.message : e) });
+}
+
+function objcClassNames() {
+  if (typeof ObjC === 'undefined' || !ObjC.available) return [];
+  var byModule = ObjC.enumerateLoadedClassesSync();
+  var names = [];
+  for (var modulePath in byModule) {
+    var list = byModule[modulePath];
+    for (var i = 0; i < list.length; i++) names.push(list[i]);
+  }
+  return names;
+}
+
+function javaPerform(fn) {
+  return new Promise(function (resolve, reject) {
+    if (typeof Java === 'undefined' || !Java.available) {
+      reject(new Error('Java runtime not available in this process'));
+      return;
+    }
+    try {
+      Java.perform(function () {
+        try { resolve(fn()); } catch (e) { reject(e); }
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function reportSummary(scriptName) {
+  send({
+    status: 'init_complete',
+    script: scriptName || __FRIDA_MCP__.name,
+    hooks_attempted: _hookStats.attempted,
+    hooks_installed: _hookStats.installed,
+    hooks_skipped: _hookStats.skipped,
+    hook_errors: _hookStats.errors.slice(0, 50)
+  });
+}
+
+// === end preamble ==="
+`;
+
+exports[`preamble snapshots (preamble portion only) > linux 1`] = `
+"// === frida-mobile-mcp agent preamble ===
+globalThis.__FRIDA_MCP__ = {"name":"snapshot:linux","platform":"linux","options":{"example":true}};
+if (typeof Java === 'undefined') { Object.defineProperty(globalThis, 'Java', { value: { available: false }, writable: true, configurable: true }); }
+if (typeof ObjC === 'undefined') { Object.defineProperty(globalThis, 'ObjC', { value: { available: false }, writable: true, configurable: true }); }
+
+var _hookStats = { attempted: 0, installed: 0, skipped: 0, errors: [] };
+
+function findExport(lib, name) {
+  try {
+    if (lib === null || lib === undefined || lib === '') {
+      return Module.findGlobalExportByName(name);
+    }
+    var mod = Process.findModuleByName(lib);
+    if (mod === null) return null;
+    return mod.findExportByName(name);
+  } catch (e) {
+    return null;
+  }
+}
+
+function hookNative(lib, name, callbacks, options) {
+  _hookStats.attempted++;
+  try {
+    var addr = findExport(lib, name);
+    if (addr) {
+      Interceptor.attach(options ? Object.assign({}, options, { target: addr }) : addr, callbacks);
+      _hookStats.installed++;
+      return true;
+    }
+    _hookStats.skipped++;
+    return false;
+  } catch (e) {
+    _hookStats.skipped++;
+    _hookStats.errors.push({ target: (lib || '*') + '!' + name, error: String(e && e.message ? e.message : e) });
+    return false;
+  }
+}
+
+function recordHookError(target, e) {
+  _hookStats.errors.push({ target: String(target), error: String(e && e.message ? e.message : e) });
+}
+
+function objcClassNames() {
+  if (typeof ObjC === 'undefined' || !ObjC.available) return [];
+  var byModule = ObjC.enumerateLoadedClassesSync();
+  var names = [];
+  for (var modulePath in byModule) {
+    var list = byModule[modulePath];
+    for (var i = 0; i < list.length; i++) names.push(list[i]);
+  }
+  return names;
+}
+
+function javaPerform(fn) {
+  return new Promise(function (resolve, reject) {
+    if (typeof Java === 'undefined' || !Java.available) {
+      reject(new Error('Java runtime not available in this process'));
+      return;
+    }
+    try {
+      Java.perform(function () {
+        try { resolve(fn()); } catch (e) { reject(e); }
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function reportSummary(scriptName) {
+  send({
+    status: 'init_complete',
+    script: scriptName || __FRIDA_MCP__.name,
+    hooks_attempted: _hookStats.attempted,
+    hooks_installed: _hookStats.installed,
+    hooks_skipped: _hookStats.skipped,
+    hook_errors: _hookStats.errors.slice(0, 50)
+  });
+}
+
+// === end preamble ==="
+`;

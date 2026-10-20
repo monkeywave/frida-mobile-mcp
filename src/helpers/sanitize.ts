@@ -65,10 +65,6 @@ export function validateTextInput(text: string): string {
   return text;
 }
 
-export function escapeForScript(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-}
-
 export function sanitizeForLog(params: Record<string, unknown>): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(params)) {

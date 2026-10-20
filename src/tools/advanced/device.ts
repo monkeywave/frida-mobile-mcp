@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../../device/manager.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
@@ -12,9 +13,10 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
     {
       title: 'List Devices',
       description: 'Enumerate all Frida-visible devices including local, USB, and remote devices. Equivalent to frida-ls-devices CLI command.',
-      inputSchema: {
+      inputSchema: z.object({
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -40,12 +42,13 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
     {
       title: 'Select Device',
       description: 'Explicitly select the active Frida device for subsequent operations.',
-      inputSchema: {
+      inputSchema: z.object({
         device_id: z.string().optional().describe('Device ID from list_devices'),
         type: z.enum(['usb', 'local', 'remote']).optional().describe('Device type'),
         host: z.string().optional().describe('Remote host:port for remote devices'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -77,10 +80,11 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
     {
       title: 'Get Device Info',
       description: 'Get detailed information about a device including OS version, architecture, and system parameters.',
-      inputSchema: {
+      inputSchema: z.object({
         device_id: z.string().optional().describe('Device ID. Uses selected device if not specified.'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

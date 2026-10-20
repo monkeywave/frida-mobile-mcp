@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../../device/manager.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
@@ -12,10 +13,11 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
     {
       title: 'List Processes',
       description: 'List running processes on the target device. Equivalent to frida-ps CLI command.',
-      inputSchema: {
+      inputSchema: z.object({
         device_id: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -54,10 +56,11 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
     {
       title: 'List Applications',
       description: 'List installed and running applications on the target device.',
-      inputSchema: {
+      inputSchema: z.object({
         device_id: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -98,10 +101,11 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
     {
       title: 'Get Frontmost Application',
       description: 'Get the currently foreground application on the device.',
-      inputSchema: {
+      inputSchema: z.object({
         device_id: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

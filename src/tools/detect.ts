@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
@@ -8,6 +9,8 @@ import { responseFormatSchema } from '../constants.js';
 import { validateProcessTarget } from '../helpers/sanitize.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { log } from '../helpers/logger.js';
+import { createAgentScript } from '../agent/script-factory.js';
+import { callRpcWithTimeout } from '../helpers/rpc-timeout.js';
 
 interface TechFingerprint {
   name: string;
@@ -50,17 +53,74 @@ const FINGERPRINTS: TechFingerprint[] = [
   { name: 'cordova', category: 'framework', patterns: ['org.apache.cordova.CordovaActivity'] },
 ];
 
+const ANDROID_DETECT_SOURCE = `
+  rpc.exports.detect = function(fingerprints) {
+    var detected = {};
+    function add(cat, name) {
+      if (!detected[cat]) detected[cat] = [];
+      if (detected[cat].indexOf(name) === -1) detected[cat].push(name);
+    }
+
+    var classLookup = {};
+    for (var i = 0; i < fingerprints.length; i++) {
+      var fp = fingerprints[i];
+      for (var j = 0; j < fp.patterns.length; j++) {
+        classLookup[fp.patterns[j]] = fp;
+      }
+    }
+
+    if (Process.findModuleByName('libflutter.so')) add('framework', 'flutter');
+
+    return javaPerform(function() {
+      Java.enumerateLoadedClasses({
+        onMatch: function(name) {
+          var match = classLookup[name];
+          if (match) add(match.category, match.name);
+        },
+        onComplete: function() {}
+      });
+      return detected;
+    });
+  };
+`;
+
+const IOS_DETECT_SOURCE = `
+  rpc.exports.detect = function() {
+    var detected = {};
+    function add(cat, name) {
+      if (!detected[cat]) detected[cat] = [];
+      if (detected[cat].indexOf(name) === -1) detected[cat].push(name);
+    }
+
+    var modules = Process.enumerateModules().map(function(m) { return m.name; });
+    if (modules.some(function(m) { return m.indexOf('Flutter') >= 0 || m.indexOf('flutter') >= 0; })) add('framework', 'flutter');
+    if (modules.indexOf('libcommonCrypto.dylib') >= 0) add('crypto', 'commoncrypto');
+
+    var classNames = objcClassNames();
+    for (var i = 0; i < classNames.length; i++) {
+      var name = classNames[i];
+      if (name.indexOf('AFSecurityPolicy') >= 0 || name.indexOf('AFHTTPSessionManager') >= 0) add('http_client', 'afnetworking');
+      if (name.indexOf('Alamofire') >= 0) add('http_client', 'alamofire');
+      if (name.indexOf('TrustKit') >= 0 || name.indexOf('TSKPinningValidator') >= 0) add('ssl_pinning', 'trustkit');
+    }
+
+    add('ssl_library', 'boringssl');
+    return detected;
+  };
+`;
+
 export function registerDetectTool(server: McpServer, deviceManager: DeviceManager): void {
   server.registerTool(
     'detect_app_technologies',
     {
       title: 'Detect App Technologies',
       description: 'Detect what libraries, frameworks, and security mechanisms an app uses. Returns structured results with recommended script targets. Run this before choosing which pre-built scripts to use.',
-      inputSchema: {
+      inputSchema: z.object({
         target: z.string().describe('App bundle ID or process name'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -81,78 +141,48 @@ export function registerDetectTool(server: McpServer, deviceManager: DeviceManag
 
         if (sessionEntry.platform === 'android') {
           // Match fingerprints ON-DEVICE — only matched results cross the IPC bridge
-          const script = await sessionEntry.session.createScript(`
-            rpc.exports.detect = function(fingerprints) {
-              var detected = {};
-              function add(cat, name) {
-                if (!detected[cat]) detected[cat] = [];
-                if (detected[cat].indexOf(name) === -1) detected[cat].push(name);
-              }
-
-              var classLookup = {};
-              for (var i = 0; i < fingerprints.length; i++) {
-                var fp = fingerprints[i];
-                for (var j = 0; j < fp.patterns.length; j++) {
-                  classLookup[fp.patterns[j]] = fp;
-                }
-              }
-
-              Java.perform(function() {
-                Java.enumerateLoadedClasses({
-                  onMatch: function(name) {
-                    var match = classLookup[name];
-                    if (match) add(match.category, match.name);
-                  },
-                  onComplete: function() {}
-                });
-              });
-
-              if (Process.findModuleByName('libflutter.so')) add('framework', 'flutter');
-
-              return detected;
-            };
-          `);
+          const script = await createAgentScript(sessionEntry.session, {
+            sessionEntry: sessionEntry,
+            source: ANDROID_DETECT_SOURCE,
+            platform: sessionEntry.platform,
+            name: 'detect_app_technologies:android',
+            kind: 'generated',
+          });
           await script.load();
-          const onDeviceResult = await script.exports.detect(
-            FINGERPRINTS.map(fp => ({ name: fp.name, category: fp.category, patterns: fp.patterns }))
-          ) as Record<string, string[]>;
-          await script.unload();
-
-          for (const [category, names] of Object.entries(onDeviceResult)) {
-            for (const name of names) addDetection(category, name);
+          try {
+            const onDeviceResult = await callRpcWithTimeout(
+              script.exports.detect(
+                FINGERPRINTS.map(fp => ({ name: fp.name, category: fp.category, patterns: fp.patterns }))
+              ) as Promise<Record<string, string[]>>,
+              'Technology detection'
+            );
+            for (const [category, names] of Object.entries(onDeviceResult)) {
+              for (const name of names) addDetection(category, name);
+            }
+          } finally {
+            await script.unload();
           }
 
         } else if (sessionEntry.platform === 'ios') {
           // Match fingerprints ON-DEVICE for iOS
-          const script = await sessionEntry.session.createScript(`
-            rpc.exports.detect = function() {
-              var detected = {};
-              function add(cat, name) {
-                if (!detected[cat]) detected[cat] = [];
-                if (detected[cat].indexOf(name) === -1) detected[cat].push(name);
-              }
-
-              var modules = Process.enumerateModules().map(function(m) { return m.name; });
-              if (modules.some(function(m) { return m.indexOf('Flutter') >= 0 || m.indexOf('flutter') >= 0; })) add('framework', 'flutter');
-              if (modules.indexOf('libcommonCrypto.dylib') >= 0) add('crypto', 'commoncrypto');
-
-              var classes = ObjC.enumerateLoadedClassesSync();
-              for (var name in classes) {
-                if (name.indexOf('AFSecurityPolicy') >= 0 || name.indexOf('AFHTTPSessionManager') >= 0) add('http_client', 'afnetworking');
-                if (name.indexOf('Alamofire') >= 0) add('http_client', 'alamofire');
-                if (name.indexOf('TrustKit') >= 0 || name.indexOf('TSKPinningValidator') >= 0) add('ssl_pinning', 'trustkit');
-              }
-
-              add('ssl_library', 'boringssl');
-              return detected;
-            };
-          `);
+          const script = await createAgentScript(sessionEntry.session, {
+            sessionEntry: sessionEntry,
+            source: IOS_DETECT_SOURCE,
+            platform: sessionEntry.platform,
+            name: 'detect_app_technologies:ios',
+            kind: 'generated',
+          });
           await script.load();
-          const onDeviceResult = await script.exports.detect() as Record<string, string[]>;
-          await script.unload();
-
-          for (const [category, names] of Object.entries(onDeviceResult)) {
-            for (const name of names) addDetection(category, name);
+          try {
+            const onDeviceResult = await callRpcWithTimeout(
+              script.exports.detect() as Promise<Record<string, string[]>>,
+              'Technology detection'
+            );
+            for (const [category, names] of Object.entries(onDeviceResult)) {
+              for (const name of names) addDetection(category, name);
+            }
+          } finally {
+            await script.unload();
           }
         }
 

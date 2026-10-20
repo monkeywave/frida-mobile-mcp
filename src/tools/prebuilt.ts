@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
@@ -10,6 +11,12 @@ import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
 import { responseFormatSchema } from '../constants.js';
+import { createAgentScript } from '../agent/script-factory.js';
+import type { PlatformContext } from '../types.js';
+
+function toPlatformContext(platform: string): PlatformContext {
+  return { platform: platform === 'android' || platform === 'ios' ? platform : 'unknown' };
+}
 
 export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceManager): void {
   server.registerTool(
@@ -17,13 +24,14 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
     {
       title: 'Run Pre-built Script',
       description: 'Run a pre-built Frida script from the built-in library. Call without script_name to list all available scripts. Available scripts include: ssl_pinning_bypass, root_jailbreak_bypass, class_enumeration, method_hook, crypto_monitor, network_inspector, keychain_prefs, filesystem_monitor.',
-      inputSchema: {
+      inputSchema: z.object({
         script_name: z.string().optional().describe('Script name. Omit to list all available scripts.'),
         target: z.string().optional().describe('App bundle ID, process name, or PID (required when running a script)'),
         device: z.string().optional().describe('Device ID'),
-        options: z.record(z.unknown()).optional().describe('Script-specific options'),
+        options: z.record(z.string(), z.unknown()).optional().describe('Script-specific options'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -88,14 +96,21 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
           );
         }
 
-        // Generate script source
-        const scriptSource = template.generate(options || {});
-
         const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, { target, device });
         let sessionEntry = resolvedSession;
 
-        // Load and run
-        const script = await sessionEntry.session.createScript(scriptSource);
+        // Generate, compose (preamble + bridges) and load. Templates read their options at
+        // runtime from __FRIDA_MCP__.options, so the user's options are passed through unchanged.
+        const platform = sessionEntry.platform;
+        const scriptOptions = options || {};
+        const script = await createAgentScript(sessionEntry.session, {
+          sessionEntry: sessionEntry,
+          source: template.generate(scriptOptions, toPlatformContext(platform)),
+          platform,
+          name: `prebuilt:${template.name}`,
+          kind: 'generated',
+          options: { ...scriptOptions, platform },
+        });
         const scriptId = state.generateId();
         const messages: Array<Record<string, unknown>> = [];
 

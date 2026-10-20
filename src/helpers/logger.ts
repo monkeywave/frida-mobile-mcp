@@ -41,6 +41,10 @@ export function log(level: LogLevel, message: string, data?: Record<string, unkn
   if (data && level === 'debug') {
     console.error(JSON.stringify(data, null, 2));
   }
+
+  if (LOG_LEVELS[level] >= LOG_LEVELS.warn) {
+    appendAuditLine({ type: 'log', ...entry });
+  }
 }
 
 export interface AuditEntry {
@@ -54,12 +58,17 @@ export interface AuditEntry {
 }
 
 export function audit(entry: AuditEntry): void {
+  appendAuditLine(entry);
+}
+
+function appendAuditLine(entry: object): void {
   if (!auditLogPath) return;
 
   try {
     const line = JSON.stringify(entry) + '\n';
     appendFileSync(auditLogPath, line, 'utf-8');
   } catch (err) {
+    // Deliberately bypasses log() to avoid recursing into the audit file.
     console.error(`[frida-mobile-mcp] [ERROR] Failed to write audit log: ${err}`);
   }
 }

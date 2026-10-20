@@ -1,30 +1,119 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
-import { wrapFridaError } from '../helpers/errors.js';
-import { validateProcessTarget, escapeForScript } from '../helpers/sanitize.js';
+import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
+import { validateProcessTarget } from '../helpers/sanitize.js';
 import { log, audit } from '../helpers/logger.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
+import { createAgentScript } from '../agent/script-factory.js';
+import { parseTarget, RESOLVE_TARGET_SNIPPET } from '../agent/address.js';
+
+/**
+ * Frida 17.10+ Interceptor instrumentation options, verified against the "Interceptor"
+ * section of https://frida.re/docs/javascript-api/ (read 2026-10-20) and the 17.10.0
+ * release notes ("attach(), replace(), and replaceFast() may now take an options object
+ * carrying the target"):
+ *
+ *   "Interceptor.attach(target, callbacks[, data]) ... The target may also be an object
+ *    with a target property containing the address, alongside one or more instrumentation
+ *    options that control how the inline hook is set up. The same goes for replace() and
+ *    replaceFast()."
+ *   "Interceptor.defaults: object with default instrumentation options applied to every
+ *    subsequent attach(), replace(), and replaceFast() call. Options specified per call
+ *    take precedence over these."
+ *
+ * So the per-call form is `Interceptor.attach({ target: addr, ...options }, callbacks)`;
+ * the options ride on the target object, not on a third argument (which stays `data`).
+ * The documented instrumentation options are:
+ *   scratchRegister    string, e.g. "x16"; "only supported on ... arm64 and mips"
+ *   scenario           "online" (default) | "offline"
+ *   relocation         "checked" (default) | "unchecked" | "forced"
+ *   writeRedirect      callback(details) - a function, not JSON-serialisable, so not exposed
+ *   redirectSpaceHint  number of bytes; "Defaults to the size needed for a full redirect,
+ *                      e.g. 16 bytes on arm64"
+ * Also verified: Interceptor.flush() and Interceptor.detachAll() are process-wide calls;
+ * the page documents no per-listener flush(), only listener.detach().
+ */
+export const interceptorOptionsSchema = z
+  .object({
+    scenario: z
+      .enum(['online', 'offline'])
+      .optional()
+      .describe('"online" (default): other threads may be mid-call in the target while it is instrumented. "offline": no call can be in flight (e.g. spawned but not yet resumed); lets Frida write past a call-semantics instruction.'),
+    relocation: z
+      .enum(['checked', 'unchecked', 'forced'])
+      .optional()
+      .describe('"checked" (default): verify the scratch register is unused in the prologue and nothing branches back into the overwritten instructions. "unchecked": skip those checks. "forced": like unchecked and also allow overwriting past the end of the function (e.g. into alignment padding).'),
+    scratchRegister: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Register Interceptor may clobber while building the trampoline, e.g. "x16". Only arm64 and mips expose scratch registers.'),
+    redirectSpaceHint: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Upper bound in bytes on the redirect size Interceptor should plan for. Defaults to a full redirect (16 bytes on arm64); larger values make the safety analysis more expensive.'),
+  })
+  .strict()
+  .optional()
+  .describe('Frida 17.10+ Interceptor instrumentation options for native hooks, passed as Interceptor.attach({ target, ...options }, callbacks). Ignored (with a limitations note) for Java and ObjC hooks. Omit to keep Frida defaults / Interceptor.defaults.');
+
+export type InterceptorOptions = z.infer<typeof interceptorOptionsSchema>;
+
+/**
+ * Drop unset keys and collapse an empty object to `undefined`, so a script only sees
+ * `interceptorOptions` when the caller actually asked for something.
+ */
+export function normalizeInterceptorOptions(input: InterceptorOptions): Record<string, unknown> | undefined {
+  if (!input) return undefined;
+  const entries = Object.entries(input).filter(([, value]) => value !== undefined);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/** `limitations` entry for hook types that do not go through Interceptor. */
+export function interceptorOptionsLimitations(hookType: 'native' | 'java' | 'objc', input: InterceptorOptions): string[] {
+  if (hookType === 'native' || normalizeInterceptorOptions(input) === undefined) return [];
+  return [`interceptor_options only apply to native Interceptor hooks and were ignored for this ${hookType} hook.`];
+}
+
+/**
+ * In-script helper: wraps an address in the Frida 17.10 options form when the caller
+ * supplied `interceptorOptions`, and returns the plain address otherwise so the
+ * pre-17.10 call shape is unchanged.
+ */
+export const INTERCEPTOR_TARGET_SNIPPET = `
+function interceptorTarget(addr) {
+  var io = __FRIDA_MCP__.options.interceptorOptions;
+  if (!io) return addr;
+  return Object.assign({}, io, { target: addr });
+}
+`;
 
 export function registerHookTool(server: McpServer, deviceManager: DeviceManager): void {
   server.registerTool(
     'hook_method',
     {
       title: 'Hook Method',
-      description: 'Hook a method to intercept calls with auto device/session management. Provide the app target and method pattern. Supports Java methods (Android: "com.example.Class.method"), Objective-C methods (iOS: "-[NSURLSession dataTaskWithRequest:]"), and native functions ("libssl.so!SSL_read"). After hooking, use get_messages to retrieve intercepted calls.',
-      inputSchema: {
-        target: z.string().describe('App bundle ID, process name, or PID (as string)'),
-        method: z.string().describe('Method to hook. Java: "com.pkg.Class.method", ObjC: "-[Class method:]", Native: "lib.so!func"'),
+      description: 'Hook a method to intercept calls with auto device/session management. Provide the app target (or a session_id of an existing session) and method pattern. Supports Java methods (Android: "com.example.Class.method"), Objective-C methods (iOS: "-[NSURLSession dataTaskWithRequest:]"), and native functions in any notation: "libssl.so!SSL_read" (module export), "libfoo.so+0x1234" or "libfoo.so+4660" (module-relative offset, as shown by Ghidra/IDA), "0x7f1234567890" (absolute address), or "!open" (global export searched across all modules). Native backtraces are reported as "module+0xoff (symbol)". After hooking, use get_messages to retrieve intercepted calls.',
+      inputSchema: z.object({
+        target: z.string().optional().describe('App bundle ID, process name, or PID (as string). Optional when session_id is given.'),
+        session_id: z.string().optional().describe('Attach the hook to this existing session (from explore_app/hook_method/get_status) instead of looking the app up by target. No new process is spawned.'),
+        method: z.string().describe('Method to hook. Java: "com.pkg.Class.method", ObjC: "-[Class method:]", Native: "lib.so!func", "lib.so+0x1234" (or decimal "lib.so+4660"), "0x7f12345678". A bare name like "open" is treated as a Java method; use "!open" or "libc.so!open" for a global native export.'),
         device: z.string().optional().describe('Device ID. Auto-selects if not specified.'),
         log_args: z.boolean().optional().default(true).describe('Log method arguments (default: true)'),
         log_retval: z.boolean().optional().default(true).describe('Log return value (default: true)'),
         log_backtrace: z.boolean().optional().default(false).describe('Log call backtrace (default: false)'),
         spawn: z.boolean().optional().default(false).describe('Spawn the app fresh instead of attaching to running process (default: false)'),
+        interceptor_options: interceptorOptionsSchema,
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -32,14 +121,15 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         openWorldHint: true,
       },
     },
-    async ({ target, method, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn, response_format }) => {
+    async ({ target, session_id, method, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn, interceptor_options, response_format }) => {
       const startTime = Date.now();
       try {
-        validateProcessTarget(target);
         const state = getState();
+        const instrumentation = resolveInstrumentationTarget(target, session_id);
 
         const { sessionEntry: resolvedSession, fridaDevice, isNew } = await getOrCreateSession(deviceManager, {
-          target,
+          target: instrumentation.target,
+          sessionId: instrumentation.sessionId,
           device,
           forceSpawn: shouldSpawn,
         });
@@ -50,14 +140,30 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
 
         const pid = sessionEntry.pid;
 
-        // Determine hook type and generate script
-        const hookScript = generateHookScript(method, {
-          logArgs: log_args ?? true,
-          logRetval: log_retval ?? true,
-          logBacktrace: log_backtrace ?? false,
-        });
+        // Determine hook type; the script body is constant per type and reads its
+        // target/flags from __FRIDA_MCP__.options at runtime (no code interpolation).
+        const hookType = detectHookType(method);
+        const hookOptions = buildHookOptions(
+          method,
+          hookType,
+          {
+            logArgs: log_args ?? true,
+            logRetval: log_retval ?? true,
+            logBacktrace: log_backtrace ?? false,
+          },
+          interceptor_options
+        );
 
-        const script = await sessionEntry.session.createScript(hookScript);
+        const script = await createAgentScript(sessionEntry.session, {
+          sessionEntry: sessionEntry,
+          source: generateHookScript(hookType),
+          platform: sessionEntry.platform,
+          name: `hook:${method}`,
+          kind: 'generated',
+          options: { ...hookOptions, platform: sessionEntry.platform },
+          // Native hooks never touch Java/ObjC; skip the bridge payload for them.
+          bridges: hookType === 'native' ? [] : undefined,
+        });
         const scriptId = state.generateId();
         const hookId = state.generateId();
 
@@ -109,7 +215,6 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         await script.load();
 
         // Register hook
-        const hookType = detectHookType(method);
         state.hooks.set(hookId, {
           id: hookId,
           scriptId,
@@ -127,7 +232,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           timestamp: new Date().toISOString(),
           sessionId: sessionEntry.id,
           tool: 'hook_method',
-          params: { target, method, log_args, log_retval, log_backtrace },
+          params: { target, session_id, method, log_args, log_retval, log_backtrace, interceptor_options },
           status: 'success',
           durationMs: Date.now() - startTime,
         });
@@ -142,6 +247,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
               method,
               hook_type: hookType,
               status: 'active',
+              interceptor_options: hookOptions.interceptorOptions ?? null,
               message: `Hook installed on ${method}. Use get_messages to retrieve intercepted calls.`,
             },
             [
@@ -149,7 +255,8 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
               { tool: 'mobile_action', args: { action: 'mobile_take_screenshot' }, reason: 'See app state before triggering the hooked method' },
               { tool: 'hook_method', reason: 'Hook additional methods' },
               { tool: 'stop_instrumentation', args: { session_id: sessionEntry.id }, reason: 'Remove all hooks when done' },
-            ]
+            ],
+            { limitations: interceptorOptionsLimitations(hookType, interceptor_options) }
           ),
           response_format
         );
@@ -158,7 +265,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         audit({
           timestamp: new Date().toISOString(),
           tool: 'hook_method',
-          params: { target, method },
+          params: { target, session_id, method },
           status: 'error',
           durationMs: Date.now() - startTime,
         });
@@ -168,154 +275,275 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
   );
 }
 
-function detectHookType(method: string): 'native' | 'java' | 'objc' {
+/** What getOrCreateSession needs to find or create the session a hook/trace attaches to. */
+export interface InstrumentationTarget {
+  target: string;
+  sessionId?: string;
+}
+
+/**
+ * Turn the optional `target` / `session_id` inputs of hook_method and trace_method
+ * into session options. A `session_id` must name an existing session (its target
+ * fills in a missing `target`); without one, `target` is required and validated.
+ */
+export function resolveInstrumentationTarget(target: string | undefined, sessionId: string | undefined): InstrumentationTarget {
+  if (sessionId) {
+    const sessionEntry = getState().getSession(sessionId);
+    if (!sessionEntry) {
+      throw new FridaMcpError(
+        'SESSION_NOT_FOUND',
+        `Session "${sessionId}" not found. Omit session_id to attach by target instead.`,
+        [{ tool: 'get_status', reason: 'List active sessions' }],
+        { session_id: sessionId }
+      );
+    }
+    return { target: target ?? sessionEntry.target, sessionId };
+  }
+  if (!target) {
+    throw new FridaMcpError(
+      'INVALID_ARGUMENT',
+      'Provide target (app bundle ID, process name or PID) or session_id of an existing session.',
+      [{ tool: 'get_status', reason: 'List active sessions and running apps' }]
+    );
+  }
+  validateProcessTarget(target);
+  return { target };
+}
+
+export type HookType = 'native' | 'java' | 'objc';
+
+export interface HookFlags {
+  logArgs: boolean;
+  logRetval: boolean;
+  logBacktrace: boolean;
+}
+
+/** `module+0xOFF` / `module+1234`: a module-relative offset is always a native target. */
+const MODULE_OFFSET_PATTERN = /^.+\+(0[xX][0-9a-fA-F]+|\d+)$/;
+
+/**
+ * Classify a method spec. A bare global symbol ("open") cannot be told apart from a
+ * Java method name, so it stays 'java'; callers use "!open" or "libc.so!open" instead.
+ */
+export function detectHookType(method: string): HookType {
   if (method.startsWith('-[') || method.startsWith('+[')) return 'objc';
   if (method.includes('!') || method.startsWith('0x')) return 'native';
+  if (MODULE_OFFSET_PATTERN.test(method)) return 'native';
   return 'java'; // Default: assume Java fully qualified method
 }
 
-function generateHookScript(
+/**
+ * Split the user-supplied method spec into the fields the script reads from
+ * `__FRIDA_MCP__.options`. Values are serialised as JSON by the preamble, never
+ * spliced into code position. `interceptorOptions` is only emitted for native hooks
+ * (see interceptorOptionsSchema); Java/ObjC hooks do not go through Interceptor.
+ */
+export function buildHookOptions(
   method: string,
-  options: { logArgs: boolean; logRetval: boolean; logBacktrace: boolean }
-): string {
-  const hookType = detectHookType(method);
-  const safeMethod = escapeForScript(method);
-
+  hookType: HookType,
+  flags: HookFlags,
+  interceptorOptions?: InterceptorOptions
+): Record<string, unknown> {
+  const options: Record<string, unknown> = { method, ...flags };
+  const normalized = hookType === 'native' ? normalizeInterceptorOptions(interceptorOptions) : undefined;
+  if (normalized) options.interceptorOptions = normalized;
   if (hookType === 'java') {
     const lastDot = method.lastIndexOf('.');
-    const safeClassName = escapeForScript(method.substring(0, lastDot));
-    const safeMethodName = escapeForScript(method.substring(lastDot + 1));
-
-    return `
-      Java.perform(function() {
-        try {
-          var cls = Java.use('${safeClassName}');
-          var overloads = cls['${safeMethodName}'].overloads;
-          overloads.forEach(function(overload) {
-            overload.implementation = function() {
-              var args = [];
-              ${options.logArgs ? `
-              for (var i = 0; i < arguments.length; i++) {
-                try { args.push(String(arguments[i])); } catch(e) { args.push('<error>'); }
-              }` : ''}
-
-              var retval = overload.apply(this, arguments);
-
-              var payload = {
-                method: '${safeMethod}',
-                type: 'java',
-                threadId: Process.getCurrentThreadId(),
-              };
-              ${options.logArgs ? 'payload.args = args;' : ''}
-              ${options.logRetval ? `try { payload.retval = String(retval); } catch(e) { payload.retval = '<error>'; }` : ''}
-              ${options.logBacktrace ? `
-              payload.backtrace = Thread.backtrace(this.context, Backtracer.ACCURATE)
-                .map(DebugSymbol.fromAddress)
-                .map(function(s) { return s.toString(); });` : ''}
-
-              send(payload);
-              return retval;
-            };
-          });
-          send({ status: 'hook_installed', method: '${safeMethod}', overloads: overloads.length });
-        } catch(e) {
-          send({ status: 'hook_error', method: '${safeMethod}', error: e.message });
-        }
-      });
-    `;
+    options.className = method.substring(0, lastDot);
+    options.methodName = method.substring(lastDot + 1);
+  } else if (hookType === 'native') {
+    // moduleName/funcName/address are kept for backward compatibility; the script
+    // resolves the target from the parsed `nativeTarget` (see RESOLVE_TARGET_SNIPPET).
+    if (method.includes('!')) {
+      const [moduleName, funcName] = method.split('!');
+      options.moduleName = moduleName;
+      options.funcName = funcName;
+    } else {
+      options.address = method;
+    }
+    options.nativeTarget = parseTarget(method);
   }
+  return options;
+}
 
-  if (hookType === 'objc') {
-    return `
-      try {
-        var resolver = new ApiResolver('objc');
-        var matches = resolver.enumerateMatches('${safeMethod}');
-        if (matches.length === 0) {
-          send({ status: 'hook_error', method: '${safeMethod}', error: 'No matches found' });
-        }
-        matches.forEach(function(match) {
-          Interceptor.attach(match.address, {
-            onEnter: function(args) {
-              this.payload = {
-                method: '${safeMethod}',
-                type: 'objc',
-                threadId: Process.getCurrentThreadId(),
-                address: match.address.toString(),
-              };
-              ${options.logArgs ? `
-              try {
-                this.payload.args = [];
-                // First two args are self and _cmd, skip them
-                for (var i = 2; i < 10; i++) {
-                  try {
-                    var arg = new ObjC.Object(args[i]);
-                    this.payload.args.push(arg.toString());
-                  } catch(e) { break; }
-                }
-              } catch(e) {}` : ''}
-              ${options.logBacktrace ? `
-              this.payload.backtrace = Thread.backtrace(this.context, Backtracer.ACCURATE)
-                .map(DebugSymbol.fromAddress)
-                .map(function(s) { return s.toString(); });` : ''}
-            },
-            onLeave: function(retval) {
-              ${options.logRetval ? `
-              try { this.payload.retval = retval.toString(); } catch(e) { this.payload.retval = retval.toInt32(); }` : ''}
-              send(this.payload);
-            }
-          });
-        });
-        send({ status: 'hook_installed', method: '${safeMethod}', matches: matches.length });
-      } catch(e) {
-        send({ status: 'hook_error', method: '${safeMethod}', error: e.message });
-      }
-    `;
-  }
+const JAVA_HOOK_SCRIPT = `
+(function () {
+  var o = __FRIDA_MCP__.options;
 
-  // Native hook
-  let address: string;
-  if (method.includes('!')) {
-    const [moduleName, funcName] = method.split('!');
-    const safeModuleName = escapeForScript(moduleName);
-    const safeFuncName = escapeForScript(funcName);
-    address = `Module.findExportByName('${safeModuleName}', '${safeFuncName}')`;
-  } else {
-    address = `ptr('${safeMethod}')`;
-  }
-
-  return `
+  function javaBacktrace() {
     try {
-      var addr = ${address};
-      if (!addr || addr.isNull()) {
-        send({ status: 'hook_error', method: '${safeMethod}', error: 'Address not found' });
-      } else {
-        Interceptor.attach(addr, {
-          onEnter: function(args) {
-            this.payload = {
-              method: '${safeMethod}',
-              type: 'native',
-              threadId: Process.getCurrentThreadId(),
-              address: addr.toString(),
-            };
-            ${options.logArgs ? `
-            this.payload.args = [];
-            for (var i = 0; i < 6; i++) {
-              this.payload.args.push(args[i].toString());
-            }` : ''}
-            ${options.logBacktrace ? `
+      var Log = Java.use('android.util.Log');
+      var Exception = Java.use('java.lang.Exception');
+      return String(Log.getStackTraceString(Exception.$new()))
+        .split('\\n')
+        .map(function (l) { return l.trim(); })
+        .filter(function (l) { return l.length > 0; });
+    } catch (e) {
+      return ['<backtrace unavailable: ' + e.message + '>'];
+    }
+  }
+
+  if (!Java.available) {
+    send({ status: 'hook_error', method: o.method, error: 'Java runtime not available in this process' });
+    return;
+  }
+
+  Java.perform(function () {
+    try {
+      var cls = Java.use(o.className);
+      var overloads = cls[o.methodName].overloads;
+      overloads.forEach(function (overload) {
+        overload.implementation = function () {
+          var args = [];
+          if (o.logArgs) {
+            for (var i = 0; i < arguments.length; i++) {
+              try { args.push(String(arguments[i])); } catch (e) { args.push('<error>'); }
+            }
+          }
+
+          var retval = overload.apply(this, arguments);
+
+          var payload = {
+            method: o.method,
+            type: 'java',
+            threadId: Process.getCurrentThreadId(),
+          };
+          if (o.logArgs) payload.args = args;
+          if (o.logRetval) {
+            try { payload.retval = String(retval); } catch (e) { payload.retval = '<error>'; }
+          }
+          if (o.logBacktrace) payload.backtrace = javaBacktrace();
+
+          send(payload);
+          return retval;
+        };
+      });
+      send({ status: 'hook_installed', method: o.method, overloads: overloads.length });
+    } catch (e) {
+      recordHookError(o.method, e);
+      send({ status: 'hook_error', method: o.method, error: e.message });
+    }
+  });
+})();
+`;
+
+const OBJC_HOOK_SCRIPT = `
+(function () {
+  var o = __FRIDA_MCP__.options;
+
+  if (!ObjC.available) {
+    send({ status: 'hook_error', method: o.method, error: 'Objective-C runtime not available in this process' });
+    return;
+  }
+
+  try {
+    var resolver = new ApiResolver('objc');
+    var matches = resolver.enumerateMatches(o.method);
+    if (matches.length === 0) {
+      send({ status: 'hook_error', method: o.method, error: 'No matches found' });
+    }
+    matches.forEach(function (match) {
+      Interceptor.attach(match.address, {
+        onEnter: function (args) {
+          this.payload = {
+            method: o.method,
+            type: 'objc',
+            threadId: Process.getCurrentThreadId(),
+            address: match.address.toString(),
+          };
+          if (o.logArgs) {
+            try {
+              this.payload.args = [];
+              // First two args are self and _cmd, skip them
+              for (var i = 2; i < 10; i++) {
+                try {
+                  var arg = new ObjC.Object(args[i]);
+                  this.payload.args.push(arg.toString());
+                } catch (e) { break; }
+              }
+            } catch (e) {}
+          }
+          if (o.logBacktrace) {
             this.payload.backtrace = Thread.backtrace(this.context, Backtracer.ACCURATE)
               .map(DebugSymbol.fromAddress)
-              .map(function(s) { return s.toString(); });` : ''}
-          },
-          onLeave: function(retval) {
-            ${options.logRetval ? `this.payload.retval = retval.toString();` : ''}
-            send(this.payload);
+              .map(function (s) { return s.toString(); });
           }
-        });
-        send({ status: 'hook_installed', method: '${safeMethod}' });
-      }
-    } catch(e) {
-      send({ status: 'hook_error', method: '${safeMethod}', error: e.message });
+        },
+        onLeave: function (retval) {
+          if (o.logRetval) {
+            try { this.payload.retval = retval.toString(); } catch (e) { this.payload.retval = retval.toInt32(); }
+          }
+          send(this.payload);
+        }
+      });
+    });
+    send({ status: 'hook_installed', method: o.method, matches: matches.length });
+  } catch (e) {
+    recordHookError(o.method, e);
+    send({ status: 'hook_error', method: o.method, error: e.message });
+  }
+})();
+`;
+
+const NATIVE_HOOK_SCRIPT = `
+(function () {
+  var o = __FRIDA_MCP__.options;
+
+  try {
+    var addr = resolveTarget(o.nativeTarget || o.method);
+    if (addr === null) {
+      send({ status: 'hook_error', method: o.method, error: 'target not found: ' + o.method });
+      return;
     }
-  `;
+    // Resolved once at install time; every invocation payload reuses it.
+    var resolved = describeAddress(addr);
+    var addressText = addr.toString();
+    // Frida 17.10 form: { target, ...instrumentation options } when options were given.
+    Interceptor.attach(interceptorTarget(addr), {
+      onEnter: function (args) {
+        this.payload = {
+          method: o.method,
+          type: 'native',
+          threadId: Process.getCurrentThreadId(),
+          address: addressText,
+          rva: resolved.rva,
+        };
+        if (o.logArgs) {
+          this.payload.args = [];
+          for (var i = 0; i < 6; i++) {
+            this.payload.args.push(args[i].toString());
+          }
+        }
+        if (o.logBacktrace) {
+          this.payload.backtrace = symbolizeBacktrace(this.context);
+        }
+      },
+      onLeave: function (retval) {
+        if (o.logRetval) this.payload.retval = retval.toString();
+        send(this.payload);
+      }
+    });
+    send({ status: 'hook_installed', method: o.method, resolved: resolved });
+  } catch (e) {
+    recordHookError(o.method, e);
+    send({ status: 'hook_error', method: o.method, error: e.message });
+  }
+})();
+`;
+
+/**
+ * Script body for a hook type. The body is constant: the target and logging flags
+ * are read at runtime from `__FRIDA_MCP__.options` (see buildHookOptions). The native
+ * body is prefixed with the shared target-resolution helpers (resolveTarget,
+ * describeAddress, symbolizeBacktrace) and the interceptorTarget() options wrapper.
+ */
+export function generateHookScript(hookType: HookType): string {
+  switch (hookType) {
+    case 'java':
+      return JAVA_HOOK_SCRIPT;
+    case 'objc':
+      return OBJC_HOOK_SCRIPT;
+    case 'native':
+      return RESOLVE_TARGET_SNIPPET + INTERCEPTOR_TARGET_SNIPPET + NATIVE_HOOK_SCRIPT;
+  }
 }

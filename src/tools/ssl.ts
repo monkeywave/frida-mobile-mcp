@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
@@ -10,6 +11,8 @@ import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
 import { responseFormatSchema } from '../constants.js';
+import { createAgentScript } from '../agent/script-factory.js';
+import type { PlatformContext } from '../types.js';
 
 export function registerSslTool(server: McpServer, deviceManager: DeviceManager): void {
   server.registerTool(
@@ -17,11 +20,12 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
     {
       title: 'Bypass SSL Pinning',
       description: 'One-click SSL certificate pinning bypass for the target app. Auto-detects platform (Android/iOS) and applies the appropriate bypass techniques. On Android: hooks TrustManager, OkHttp CertificatePinner, and Conscrypt. On iOS: hooks SecTrust, ATS, and BoringSSL verification. Returns which bypass methods were successfully installed.',
-      inputSchema: {
+      inputSchema: z.object({
         target: z.string().describe('App bundle ID or process name'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
-      },
+      }),
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -49,8 +53,15 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
           throw new Error('SSL pinning bypass script not found in registry');
         }
 
-        const scriptSource = template.generate({ platform });
-        const script = await sessionEntry.session.createScript(scriptSource);
+        const context: PlatformContext = { platform: platform === 'android' || platform === 'ios' ? platform : 'unknown' };
+        const script = await createAgentScript(sessionEntry.session, {
+          sessionEntry: sessionEntry,
+          source: template.generate({ platform }, context),
+          platform,
+          name: `prebuilt:${template.name}`,
+          kind: 'generated',
+          options: { platform },
+        });
         const scriptId = state.generateId();
         const results: Array<Record<string, unknown>> = [];
 

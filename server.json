@@ -1,0 +1,130 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.monkeywave/frida-mobile-mcp",
+  "title": "Frida Mobile MCP",
+  "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
+  "version": "0.2.3",
+  "websiteUrl": "https://github.com/monkeywave/frida-mobile-mcp",
+  "repository": {
+    "url": "https://github.com/monkeywave/frida-mobile-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "frida-mobile-mcp",
+      "version": "0.2.3",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FRIDA_DEVICE_ID",
+          "description": "Default Frida device ID to use (e.g. emulator-5554 or a USB serial). Can also be set with --device.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS",
+          "description": "Set to \"1\" to enable execution of custom Frida scripts (execute_script and custom hook_function handlers). Disabled by default.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "0"
+        },
+        {
+          "name": "FRIDA_MCP_MEMORY_WRITE",
+          "description": "Set to \"1\" to enable the write_memory tool. Disabled by default for safety.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "0"
+        },
+        {
+          "name": "FRIDA_MCP_REMOTE",
+          "description": "host[:port] of a remote frida-server to add as a remote device at startup (port defaults to 27042).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRIDA_MCP_SCHEMA_PROFILE",
+          "description": "Tool schema profile. \"compact\" shortens tool schemas and descriptions for clients with small context windows.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "full",
+            "compact"
+          ],
+          "default": "full"
+        },
+        {
+          "name": "FRIDA_MCP_MAX_RESPONSE_CHARS",
+          "description": "Maximum number of characters in a single tool response; longer output is truncated.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "number",
+          "default": "25000"
+        },
+        {
+          "name": "FRIDA_MCP_HTTP_TOKEN",
+          "description": "Bearer token required by HTTP clients. Only used with --transport http (required when --host is not loopback); unused for the default stdio transport.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "FRIDA_MCP_RUNTIME",
+          "description": "Frida script runtime to use for injected agents.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "qjs",
+            "v8"
+          ]
+        },
+        {
+          "name": "FRIDA_MCP_DEBUG",
+          "description": "Set to \"1\" to enable debug logging on stderr. Can also be set with --debug.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "0"
+        },
+        {
+          "name": "FRIDA_MCP_BRIDGES_DIR",
+          "description": "Directory with prebuilt Java/ObjC bridge bundles (defaults to dist/bridges inside the package)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRIDA_MCP_COMPILER_PROJECT_DIR",
+          "description": "Cache directory for the frida.Compiler project used to compile ES module scripts",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRITAP_AGENT_PATH",
+          "description": "Path to a friTap fritap_agent.js bundle for capture_tls (otherwise the installed friTap Python package or a pinned download is used)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRITAP_VERSION",
+          "description": "friTap release tag to download when no local agent is found (default v2.5.2)",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

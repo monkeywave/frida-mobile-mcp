@@ -1,4 +1,4 @@
-import { getMobileMcpClient } from './client.js';
+import { getMobileMcpClient, onMobileMcpDisconnect } from './client.js';
 import { log } from '../helpers/logger.js';
 
 export interface MobileMcpProxy {
@@ -8,6 +8,13 @@ export interface MobileMcpProxy {
 
 let proxyInstance: MobileMcpProxy | null = null;
 let toolCache: Array<{ name: string; description?: string }> | null = null;
+
+/** Drop the cached tool list; a reconnected mobile-mcp may expose a different set. */
+export function invalidateMobileMcpToolCache(): void {
+  toolCache = null;
+}
+
+onMobileMcpDisconnect(invalidateMobileMcpToolCache);
 
 class MobileMcpProxyImpl implements MobileMcpProxy {
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
