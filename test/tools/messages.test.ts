@@ -102,12 +102,35 @@ describe('get_messages MCP tool', () => {
     const first = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, limit: 2 });
     expect(first.result.messages_count).toBe(2);
     expect(first.result.truncated).toBe(true);
-    // A follow-up suggestion seeds the next page with since = last_index + 1.
+    // A follow-up suggestion seeds the next page with since = last_index (exclusive cursor).
     const more = first.suggested_next.find((s: Json) => s.tool === 'get_messages');
-    expect(more.args.since).toBe(first.result.last_index + 1);
+    expect(more.args.since).toBe(first.result.last_index);
 
     const next = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, since: more.args.since });
-    expect(next.result.messages.every((m: Json) => m.index >= more.args.since)).toBe(true);
+    expect(next.result.messages.every((m: Json) => m.seq > more.args.since)).toBe(true);
+  });
+
+  it('paginates across multiple scripts without skipping or duplicating messages', async () => {
+    const state = getState();
+    seedSession(state, [scriptEntry(SCRIPT_A, fakeScript()), scriptEntry(SCRIPT_B, fakeScript())]);
+    // Interleave messages across two scripts: per-script indices collide (both start at 0),
+    // so only the global seq cursor can page a merged stream correctly.
+    addMessage(SCRIPT_A, 'hook_invocation', { n: 'a0' });
+    addMessage(SCRIPT_B, 'hook_invocation', { n: 'b0' });
+    addMessage(SCRIPT_A, 'hook_invocation', { n: 'a1' });
+    addMessage(SCRIPT_B, 'hook_invocation', { n: 'b1' });
+
+    const seen: unknown[] = [];
+    let since = 0;
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, since, limit: 2 });
+      seen.push(...page.result.messages.map((m: Json) => (m.payload as Json).n));
+      if (!page.result.truncated) break;
+      since = page.result.last_index;
+    }
+
+    // Every message exactly once, in global order.
+    expect(seen).toEqual(['a0', 'b0', 'a1', 'b1']);
   });
 
   it('returns an empty set with last_index echoing the since cursor when nothing is buffered', async () => {

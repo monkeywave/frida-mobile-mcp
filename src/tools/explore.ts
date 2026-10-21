@@ -58,7 +58,6 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
 
         const filter = class_filter || (platform === 'android' ? escapeRegExp(target) : '.*');
         let modules: ModuleInfo[] = [];
-        let classes: string[] = [];
         try {
           modules = await enumerateModules(sessionEntry);
         } finally {
@@ -67,7 +66,10 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
             log('info', `App ${target} launched and resumed (PID: ${pid})`);
           }
         }
-        classes = await enumerateClasses(sessionEntry, filter);
+        const { classes, error: classesError } = await enumerateClasses(sessionEntry, filter);
+        // The app's own native libraries — the ones worth hooking — are drowned out by the
+        // ~340 system modules; surface them separately so they are not lost to truncation.
+        const appModules = modules.filter((m) => isAppOwnedModule(m, target));
 
         audit({
           timestamp: new Date().toISOString(),
@@ -87,9 +89,13 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
               spawned,
               device: { id: fridaDevice.id, name: fridaDevice.name, type: fridaDevice.type },
               modules_count: modules.length,
-              modules: modules.slice(0, 50).map((m) => ({ name: m.name, path: m.path })),
+              // Keep base/size: Ghidra/IDA offsets resolve against the runtime base, and the
+              // native tools consume the `module+0xoff` form that needs it.
+              modules: modules.slice(0, 50).map((m) => ({ name: m.name, base: m.base, size: m.size, path: m.path })),
+              app_modules: appModules.map((m) => ({ name: m.name, base: m.base, size: m.size, path: m.path })),
               classes_count: classes.length,
               classes: classes.slice(0, 100),
+              ...(classesError ? { classes_error: classesError } : {}),
               truncated: {
                 modules: modules.length > 50,
                 classes: classes.length > 100,
@@ -100,7 +106,8 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
               { tool: 'hook_method', reason: 'Hook a method of interest' },
               { tool: 'bypass_ssl_pinning', args: { target }, reason: 'Bypass SSL pinning for network analysis' },
               { tool: 'mobile_action', args: { action: 'mobile_take_screenshot' }, reason: 'Take a screenshot to see the app state' },
-            ]
+            ],
+            classesError ? { limitations: [`Class enumeration failed: ${classesError}. Module data is still complete.`] } : {}
           ),
           response_format
         );
@@ -124,6 +131,19 @@ interface ModuleInfo {
   base: string;
   size: number;
   path: string;
+}
+
+/**
+ * Heuristic for a module that belongs to the app rather than the system: it is loaded from the
+ * app's install/data directory, or its name/path carries the package id. This is what lets the
+ * AI spot an app's own native library (e.g. a native crypto .so) amid ~340 system modules.
+ */
+function isAppOwnedModule(m: ModuleInfo, target: string): boolean {
+  const path = (m.path || '').toLowerCase();
+  const pkg = target.toLowerCase();
+  if (path.includes('/data/app/') || path.includes('/data/data/')) return true;
+  if (pkg && (path.includes(pkg) || m.name.toLowerCase().includes(pkg))) return true;
+  return false;
 }
 
 
@@ -192,8 +212,14 @@ const CLASS_ENUMERATION_SOURCE = `
   };
 `;
 
-async function enumerateClasses(sessionEntry: SessionEntry, filter: string): Promise<string[]> {
-  if (sessionEntry.platform !== 'android' && sessionEntry.platform !== 'ios') return [];
+interface ClassEnumeration {
+  classes: string[];
+  /** Non-fatal failure reason, surfaced to the caller instead of being swallowed as []. */
+  error?: string;
+}
+
+async function enumerateClasses(sessionEntry: SessionEntry, filter: string): Promise<ClassEnumeration> {
+  if (sessionEntry.platform !== 'android' && sessionEntry.platform !== 'ios') return { classes: [] };
 
   const script = await createAgentScript(sessionEntry.session, {
     sessionEntry: sessionEntry,
@@ -211,11 +237,14 @@ async function enumerateClasses(sessionEntry: SessionEntry, filter: string): Pro
         { tool: 'explore_app', args: { target: sessionEntry.target }, reason: 'Retry with a valid class_filter regex' },
       ]);
     }
-    return result;
+    return { classes: result };
   } catch (err) {
     if (err instanceof FridaMcpError && err.code === 'INVALID_PATTERN') throw err;
-    log('debug', `Class enumeration failed: ${err}`);
-    return [];
+    // Don't fail the whole exploration — modules are still useful — but report the gap
+    // instead of returning [] as if the app genuinely had no matching classes.
+    const message = err instanceof Error ? err.message : String(err);
+    log('debug', `Class enumeration failed: ${message}`);
+    return { classes: [], error: message };
   } finally {
     await script.unload();
   }

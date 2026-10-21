@@ -5,7 +5,7 @@ import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError, FridaMcpError } from '../helpers/errors.js';
-import { validateProcessTarget } from '../helpers/sanitize.js';
+import { resolveInstrumentationTarget } from './hook.js';
 import { log } from '../helpers/logger.js';
 import { responseFormatSchema } from '../constants.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
@@ -20,7 +20,8 @@ export function registerSearchTool(server: McpServer, deviceManager: DeviceManag
       title: 'Search Classes and Methods',
       description: 'Search for classes and their methods by pattern in a running app. Combines class enumeration and method listing. Use regex patterns like "Login", "com\\.example\\.auth.*", or "NSURLSession". Returns matching classes with their methods when include_methods is true.',
       inputSchema: z.object({
-        target: z.string().describe('App bundle ID, process name, or PID'),
+        target: z.string().optional().describe('App bundle ID, process name, or PID. Optional when session_id is given.'),
+        session_id: z.string().optional().describe('Reuse an existing session (from explore_app/get_status) instead of re-attaching by target.'),
         pattern: z.string().describe('Regex pattern to match class names'),
         device: z.string().optional().describe('Device ID'),
         include_methods: z.boolean().optional().default(false).describe('Also enumerate methods of matched classes (default: false)'),
@@ -35,13 +36,13 @@ export function registerSearchTool(server: McpServer, deviceManager: DeviceManag
         openWorldHint: true,
       },
     },
-    async ({ target, pattern, device, include_methods, limit, response_format }) => {
+    async ({ target, session_id, pattern, device, include_methods, limit, response_format }) => {
       try {
-        validateProcessTarget(target);
+        const resolved = resolveInstrumentationTarget(target, session_id);
         const state = getState();
         const maxResults = limit ?? 50;
 
-        const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, { target, device });
+        const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, { target: resolved.target, device, sessionId: resolved.sessionId });
         let sessionEntry = resolvedSession;
 
         const platform = sessionEntry.platform;

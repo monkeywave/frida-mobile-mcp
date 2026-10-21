@@ -16,7 +16,8 @@ import { createHash } from 'node:crypto';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript, isFridaCompileBundle } from '../agent/script-factory.js';
 import { compileEsmAgent } from '../agent/compiler.js';
-import { detectScriptKind } from './validate.js';
+import { detectScriptKind, validateScriptSource as runScriptValidation, type ValidateScriptResult } from './validate.js';
+import { attachScriptSinks } from '../helpers/script-sink.js';
 import type { BridgeName } from '../agent/bridges.js';
 
 export type SourceKind = 'auto' | 'classic' | 'esm' | 'bundle';
@@ -46,6 +47,47 @@ export class ScriptTimeoutError extends FridaMcpError {
 /** Resolve 'auto' by sniffing the source; explicit kinds are returned unchanged. */
 export function detectSourceKind(source: string, requested: SourceKind = 'auto'): ResolvedSourceKind {
   return requested === 'auto' ? detectScriptKind(source) : requested;
+}
+
+/**
+ * Run the same host-side checks as `validate_script` (classic syntax via node:vm or ESM
+ * Compiler diagnostics, plus the Frida 17 removed-API lint) and throw a line-numbered
+ * SCRIPT_ERROR if the source would not load cleanly. Bundles are trusted pass-through.
+ * Runs before the device is touched, so a bad script never spawns or attaches to a process.
+ */
+async function assertScriptPassesLint(source: string, kind: ResolvedSourceKind): Promise<void> {
+  if (kind === 'bundle') return;
+  const result = await runScriptValidation({ source });
+  if (result.ok) return;
+  throw scriptLintError(result, source);
+}
+
+/** Build a readable, line-numbered SCRIPT_ERROR from a failed validation result. */
+function scriptLintError(result: ValidateScriptResult, source: string): FridaMcpError {
+  const lines: string[] = [];
+  for (const d of result.diagnostics) {
+    if (d.severity !== 'error') continue;
+    const loc = d.line != null ? `:${d.line}${d.column != null ? `:${d.column}` : ''}` : '';
+    lines.push(`${d.severity}${loc} — ${d.message}`);
+  }
+  for (const r of result.removed_apis) {
+    lines.push(`removed API at line ${r.line}: ${r.match} — use ${r.replacement}`);
+  }
+  const summary = lines.length === 1 ? lines[0] : `script would not load:\n  ${lines.join('\n  ')}`;
+  return new FridaMcpError(
+    'SCRIPT_ERROR',
+    `Script error: ${summary}`,
+    [
+      { tool: 'validate_script', args: {}, reason: 'Re-check the script without a device' },
+      { tool: 'frida_help', args: { topic: 'scripts' }, reason: 'Frida 17 API rules and preamble helpers' },
+    ],
+    {
+      kind: result.kind,
+      diagnostics: result.diagnostics.filter((d) => d.severity === 'error'),
+      removed_apis: result.removed_apis,
+      script_preview: source.slice(0, 200),
+    },
+  );
 }
 
 /** Effective timeout: explicit value wins; otherwise one-shot scripts get a default, persistent ones none. */
@@ -153,6 +195,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
         persistent: z.boolean().optional().default(true).describe('Keep script loaded (default: true). Set false for one-shot scripts.'),
         bridges: z.array(z.enum(['java', 'objc'])).optional().describe('Classic scripts only: bridges to inject, overriding the platform default (android: ["java"], ios/macos: ["objc"]). Use [] for scripts that never touch Java/ObjC.'),
         source_kind: z.enum(['auto', 'classic', 'esm', 'bundle']).default('auto').describe('How to treat the source: "auto" (default) detects a 📦 bundle, then import/export syntax (esm), else classic; "esm" compiles with the Frida Compiler; "bundle" passes frida-compile output through unchanged.'),
+        skip_validation: z.boolean().optional().default(false).describe('Skip the pre-load syntax + Frida 17 removed-API check. Validation is on by default and rejects a bad script (with line numbers) before the device is touched; set true only to deliberately run code the linter would flag.'),
         timeout_ms: z.number().int().min(0).optional().describe('Max time for the script\'s initial run in ms. Default: 30000 for one-shot (persistent: false) scripts, 0 (no timeout) for persistent ones. On overrun the script is interrupted, then terminated after 2 s.'),
         response_format: responseFormatSchema,
       }),
@@ -164,7 +207,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
         openWorldHint: true,
       },
     },
-    async ({ target, source, file_path, device, session_id, persistent, bridges, source_kind, timeout_ms, response_format }) => {
+    async ({ target, source, file_path, device, session_id, persistent, bridges, source_kind, skip_validation, timeout_ms, response_format }) => {
       const startTime = Date.now();
       try {
         const state = getState();
@@ -177,6 +220,13 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
         const scriptSource = readScriptSource(source, file_path);
         validateScriptSource(scriptSource);
         validateProcessTarget(target);
+
+        // Fail fast, before the device is ever touched: reject syntax errors and APIs
+        // removed in Frida 17 (e.g. Module.findExportByName) with line numbers, so the AI
+        // sees them as authoring diagnostics rather than a cryptic runtime "not a function".
+        if (!skip_validation) {
+          await assertScriptPassesLint(scriptSource, detectSourceKind(scriptSource, source_kind));
+        }
 
         rateLimiter.check('script', state.config.rateLimits.scriptsPerMinute);
         rateLimiter.record('script');
@@ -223,15 +273,11 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
         };
         sessionEntry.scripts.set(scriptId, scriptEntry);
 
-        script.message.connect((message, data) => {
-          const entry = {
-            timestamp: Date.now(),
-            type: message.type,
-            payload: message.type === 'send' ? message.payload : { description: (message as any).description },
-            data: data ?? null,
-          };
-          state.addMessageToScript(sessionEntry!.id, scriptId, entry);
-          messages.push({ type: message.type, payload: entry.payload });
+        // Capture agent console.* into the buffer (never to stdout) and record every
+        // send/error message with full error fidelity (stack/file/line/column), while
+        // mirroring each entry into the inline `messages` returned from this call.
+        attachScriptSinks(script, sessionEntry.id, scriptId, {
+          onEntry: (entry) => messages.push({ type: entry.type, payload: entry.payload }),
         });
 
         try {
@@ -244,7 +290,9 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
             sessionEntry.scripts.delete(scriptId);
           }
         } catch (err) {
-          if (err instanceof ScriptTimeoutError) sessionEntry.scripts.delete(scriptId);
+          // Any load/unload failure (timeout or otherwise) must not leave a dead script
+          // entry behind in the session — it would show up forever in get_status/get_messages.
+          sessionEntry.scripts.delete(scriptId);
           throw err;
         }
 

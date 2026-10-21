@@ -50,7 +50,14 @@ export interface DetachRecord {
 }
 
 export interface MessageEntry {
+  /** Per-script counter (survives buffer trimming); kept for display/back-compat. */
   index: number;
+  /**
+   * Session-global monotonic sequence number across all scripts. Pagination cursors use
+   * this so merging messages from several scripts can neither skip nor duplicate entries
+   * (per-script `index` values collide across scripts and cannot order a merged stream).
+   */
+  seq: number;
   timestamp: number;
   type: string;
   payload: unknown;
@@ -66,7 +73,30 @@ export interface HookEntry {
   invocations: HookInvocation[];
   status: 'active' | 'completed' | 'error';
   createdAt: number;
+  liveness?: HookLiveness;
 }
+
+/**
+ * Whether a hook actually attached, and whether it has ever fired. The point is to
+ * turn a silent miss — a hook that installs but never runs because the hypothesis was
+ * wrong (wrong class, wrong overload, class not loaded) — into first-class feedback the
+ * AI can read, instead of leaving it to infer failure from `invocations: 0`.
+ */
+export interface HookLiveness {
+  installed: boolean;           // did the agent attach the interceptor / implementation
+  classResolved?: boolean;      // java/objc: was the target class found (in any loader)
+  overloadsMatched?: number;    // java: how many method overloads were instrumented
+  matches?: number;             // objc: how many classes/selectors matched
+  firstSeenTs?: number | null;  // when the hook first fired; null = installed but never hit
+  reason?: HookMissReason;      // populated when installed === false
+}
+
+export type HookMissReason =
+  | 'CLASS_NOT_LOADED'   // java/objc: class is not present in any loaded class loader (yet)
+  | 'NO_SUCH_METHOD'     // java/objc: class found, but the method/selector does not exist
+  | 'OVERLOAD_MISMATCH'  // java: method found, but no overload matched the requested signature
+  | 'NO_EXPORT'          // native: the module!symbol / address could not be resolved
+  | 'NO_RUNTIME';        // the Java/ObjC runtime is not available in this process
 
 export interface HookInvocation {
   timestamp: number;

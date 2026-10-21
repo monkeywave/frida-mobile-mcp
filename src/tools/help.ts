@@ -22,13 +22,20 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 7. \`capture_tls\` — TLS keys and plaintext via friTap (no pinning bypass needed)
 
 ## Tool Categories
-- **Exploration**: explore_app, detect_app_technologies, search_classes_and_methods
+- **Exploration**: explore_app, detect_app_technologies, search_classes_and_methods, discover_crypto
 - **Instrumentation**: hook_method, trace_method, execute_script, validate_script, run_prebuilt_script
+- **Observation**: watch_loads (late-loaded libs/classes + anti-Frida probes), trigger_and_wait (do a UI action, then wait for the hooks it fires)
 - **Security / TLS**: bypass_ssl_pinning, capture_tls
 - **Memory**: read_memory, write_memory, scan_memory
 - **Native analysis** (topic \`native\`): enumerate_modules, enumerate_exports, enumerate_imports, enumerate_symbols, resolve_address, analyze_native_function, dump_module_memory, list_threads
 - **Mobile UI**: mobile_action (tap, swipe, screenshot, elements via mobile-mcp)
 - **Management**: get_status, get_messages, stop_instrumentation, unload_script, frida_help
+
+## Finding the right hook target (crypto example)
+1. \`discover_crypto\` — ranked candidate classes/symbols (does NOT assume javax.crypto; finds custom Java like \`Rc4Client\` and native symbols).
+2. \`hook_method\` on the top candidate.
+3. \`trigger_and_wait\` — drive the app (a tap/launch) and confirm the hook fired; if nothing fires, check \`get_status\` hook liveness and re-run \`discover_crypto\`.
+4. \`watch_loads\` if the implementation loads later (native \`.so\` or dynamic dex) or the app runs anti-Frida checks.
 - **Advanced primitives** (topic \`advanced\`): devices, processes, sessions, hook_function/unhook_function
 
 ## Response Format

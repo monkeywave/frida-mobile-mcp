@@ -4,6 +4,7 @@ import { initState, getState } from '../../src/state.js';
 import {
   callJson,
   makeMcpHarness,
+  seedSession,
   TEST_CONFIG,
   type Json,
   type McpHarness,
@@ -101,6 +102,33 @@ describe('mobile_action MCP tool', () => {
     await callJson(client, 'mobile_action', { action: 'mobile_list_apps' });
 
     expect(callTool).toHaveBeenCalledWith('mobile_list_apps', {});
+  });
+
+  it('injects the device from the given session when the caller omits one', async () => {
+    callTool.mockResolvedValue({ ok: true });
+    // A physical-serial deviceId passes through device-resolve unchanged (only emulator-N serials
+    // are translated to AVD names, which needs adb and is covered by the e2e path).
+    seedSession(getState(), [], { id: 'sess-1', deviceId: 'PIXEL7ABC123' });
+
+    await callJson(client, 'mobile_action', {
+      action: 'mobile_list_elements_on_screen',
+      session_id: 'sess-1',
+    });
+
+    expect(callTool).toHaveBeenCalledWith('mobile_list_elements_on_screen', { device: 'PIXEL7ABC123' });
+  });
+
+  it('does not overwrite an explicit device param', async () => {
+    callTool.mockResolvedValue({ ok: true });
+    seedSession(getState(), [], { id: 'sess-2', deviceId: 'PIXEL7ABC123' });
+
+    await callJson(client, 'mobile_action', {
+      action: 'mobile_list_elements_on_screen',
+      session_id: 'sess-2',
+      params: { device: 'emulator-9999' },
+    });
+
+    expect(callTool).toHaveBeenCalledWith('mobile_list_elements_on_screen', { device: 'emulator-9999' });
   });
 
   it('maps a missing mobile-mcp install to MOBILE_MCP_UNAVAILABLE', async () => {

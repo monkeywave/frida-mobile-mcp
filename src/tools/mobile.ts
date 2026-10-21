@@ -41,6 +41,7 @@ export function registerMobileTool(server: McpServer): void {
       inputSchema: z.object({
         action: z.string().optional().describe('mobile-mcp action name (e.g., "mobile_take_screenshot"). Omit to list available actions.'),
         params: z.record(z.string(), z.unknown()).optional().describe('Parameters for the action'),
+        session_id: z.string().optional().describe('Resolve the mobile device from this session (falls back to the selected device). Needed so UI actions target the right device when several are attached.'),
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
@@ -51,7 +52,7 @@ export function registerMobileTool(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ action, params, response_format }) => {
+    async ({ action, params, session_id, response_format }) => {
       try {
         const state = getState();
 
@@ -88,11 +89,15 @@ export function registerMobileTool(server: McpServer): void {
           );
         }
 
-        // Try to use mobile-mcp proxy
+        // Resolve the device so UI actions target the right one when several are attached.
+        const fridaDeviceId = session_id
+          ? state.getSession(session_id)?.deviceId
+          : state.selectedDevice?.id;
+
+        // Try to use mobile-mcp proxy (shared helper resolves + injects the device).
         try {
-          const { getMobileMcpProxy } = await import('../mobile-mcp/proxy.js');
-          const proxy = await getMobileMcpProxy();
-          const result = await proxy.callTool(action, params || {});
+          const { callMobileAction } = await import('../mobile-mcp/call.js');
+          const result = await callMobileAction(action, params, fridaDeviceId);
 
           audit({
             timestamp: new Date().toISOString(),

@@ -5,6 +5,7 @@ import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
 import { FridaMcpError, CustomScriptDisabledError, wrapFridaError } from '../../helpers/errors.js';
 import { createAgentScript } from '../../agent/script-factory.js';
+import { attachScriptSinks } from '../../helpers/script-sink.js';
 import { responseFormatSchema } from '../../constants.js';
 import { parseTarget, RESOLVE_TARGET_SNIPPET } from '../../agent/address.js';
 import {
@@ -156,15 +157,10 @@ export function registerAdvancedInterceptTools(server: McpServer): void {
           createdAt: Date.now(),
         });
 
-        script.message.connect((message, data) => {
-          if (message.type === 'send') {
-            state.addMessageToScript(session_id, scriptId, {
-              timestamp: Date.now(),
-              type: 'hook',
-              payload: message.payload,
-              data: data ?? null,
-            });
-          }
+        attachScriptSinks(script, session_id, scriptId, {
+          onSend: (payload, data) => {
+            state.addMessageToScript(session_id, scriptId, { timestamp: Date.now(), type: 'hook', payload, data: data ?? null });
+          },
         });
 
         await script.load();

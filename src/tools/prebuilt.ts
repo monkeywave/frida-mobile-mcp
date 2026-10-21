@@ -12,6 +12,7 @@ import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript } from '../agent/script-factory.js';
+import { attachScriptSinks } from '../helpers/script-sink.js';
 import type { PlatformContext } from '../types.js';
 
 function toPlatformContext(platform: string): PlatformContext {
@@ -123,16 +124,11 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
           createdAt: Date.now(),
         });
 
-        script.message.connect((message, data) => {
-          if (message.type === 'send') {
-            messages.push(message.payload);
-            state.addMessageToScript(sessionEntry!.id, scriptId, {
-              timestamp: Date.now(),
-              type: 'prebuilt_output',
-              payload: message.payload,
-              data: data ?? null,
-            });
-          }
+        attachScriptSinks(script, sessionEntry.id, scriptId, {
+          onSend: (payload, data) => {
+            messages.push(payload as Record<string, unknown>);
+            state.addMessageToScript(sessionEntry!.id, scriptId, { timestamp: Date.now(), type: 'prebuilt_output', payload, data: data ?? null });
+          },
         });
 
         await script.load();

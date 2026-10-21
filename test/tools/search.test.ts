@@ -97,9 +97,9 @@ describe('search_classes_and_methods MCP tool', () => {
     expect(agentOptions(searchScript().source).pattern).toBe(hostile);
   });
 
-  it('rejects an empty target', async () => {
+  it('rejects an empty target with no session to fall back on', async () => {
     const parsed = await callJson(client, 'search_classes_and_methods', { target: '', pattern: 'x' });
     expect(parsed.error).toBeDefined();
-    expect(parsed.error.message).toMatch(/target cannot be empty/i);
+    expect(parsed.error.message).toMatch(/provide target.*or session_id/i);
   });
 });

@@ -6,7 +6,7 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError, FridaMcpError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
-import { validateProcessTarget } from '../helpers/sanitize.js';
+import { resolveInstrumentationTarget } from './hook.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { log } from '../helpers/logger.js';
 import { createAgentScript } from '../agent/script-factory.js';
@@ -116,7 +116,8 @@ export function registerDetectTool(server: McpServer, deviceManager: DeviceManag
       title: 'Detect App Technologies',
       description: 'Detect what libraries, frameworks, and security mechanisms an app uses. Returns structured results with recommended script targets. Run this before choosing which pre-built scripts to use.',
       inputSchema: z.object({
-        target: z.string().describe('App bundle ID or process name'),
+        target: z.string().optional().describe('App bundle ID or process name. Optional when session_id is given.'),
+        session_id: z.string().optional().describe('Reuse an existing session (from explore_app/get_status) instead of re-attaching by target.'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
       }),
@@ -128,10 +129,10 @@ export function registerDetectTool(server: McpServer, deviceManager: DeviceManag
         openWorldHint: true,
       },
     },
-    async ({ target, device, response_format }) => {
+    async ({ target, session_id, device, response_format }) => {
       try {
-        validateProcessTarget(target);
-        const { sessionEntry } = await getOrCreateSession(deviceManager, { target, device });
+        const resolved = resolveInstrumentationTarget(target, session_id);
+        const { sessionEntry } = await getOrCreateSession(deviceManager, { target: resolved.target, device, sessionId: resolved.sessionId });
 
         const detected: Record<string, string[]> = {};
         const addDetection = (category: string, name: string): void => {

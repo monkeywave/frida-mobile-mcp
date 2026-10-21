@@ -79,10 +79,12 @@ describe('explore_app MCP tool', () => {
     });
     expect(parsed.result.classes).toEqual(['com.example.app.MainActivity', 'com.example.app.Login']);
     expect(parsed.result.modules).toEqual([
-      { name: 'lib1.so', path: '/system/lib/lib1.so' },
-      { name: 'lib2.so', path: '/system/lib/lib2.so' },
+      { name: 'lib1.so', base: '0x1001', size: 4096, path: '/system/lib/lib1.so' },
+      { name: 'lib2.so', base: '0x1002', size: 4096, path: '/system/lib/lib2.so' },
     ]);
     expect(parsed.result.truncated).toEqual({ modules: false, classes: false });
+    // System libs are not app-owned, so app_modules stays empty here.
+    expect(parsed.result.app_modules).toEqual([]);
     expect(device.resume).toHaveBeenCalledWith(SPAWNED_PID);
     expect(parsed.suggested_next.map((s: any) => s.tool)).toContain('bypass_ssl_pinning');
   });

@@ -10,7 +10,9 @@ import { log, audit } from '../helpers/logger.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript } from '../agent/script-factory.js';
+import { attachScriptSinks } from '../helpers/script-sink.js';
 import { parseTarget, RESOLVE_TARGET_SNIPPET } from '../agent/address.js';
+import type { HookEntry, HookMissReason } from '../types.js';
 
 /**
  * Frida 17.10+ Interceptor instrumentation options, verified against the "Interceptor"
@@ -177,44 +179,8 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         };
         sessionEntry.scripts.set(scriptId, scriptEntry);
 
-        // Listen for messages
-        script.message.connect((message, data) => {
-          if (message.type === 'send') {
-            state.addMessageToScript(sessionEntry!.id, scriptId, {
-              timestamp: Date.now(),
-              type: 'hook_invocation',
-              payload: message.payload,
-              data: data ?? null,
-            });
-
-            // Update hook invocations
-            const hook = state.hooks.get(hookId);
-            if (hook && message.payload) {
-              hook.invocations.push({
-                timestamp: Date.now(),
-                threadId: message.payload.threadId ?? 0,
-                args: message.payload.args ?? [],
-                retval: message.payload.retval,
-                backtrace: message.payload.backtrace ?? null,
-              });
-              // Cap invocations to prevent unbounded growth
-              if (hook.invocations.length > 1000) {
-                hook.invocations.splice(0, hook.invocations.length - 1000);
-              }
-            }
-          } else if (message.type === 'error') {
-            state.addMessageToScript(sessionEntry!.id, scriptId, {
-              timestamp: Date.now(),
-              type: 'error',
-              payload: { description: message.description, stack: message.stack, fileName: message.fileName, lineNumber: message.lineNumber },
-              data: null,
-            });
-          }
-        });
-
-        await script.load();
-
-        // Register hook
+        // Register the hook before loading so the agent's install-status message (sent
+        // during load) can update its liveness. Cleaned up below if the load fails.
         state.hooks.set(hookId, {
           id: hookId,
           scriptId,
@@ -224,7 +190,47 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           invocations: [],
           status: 'active',
           createdAt: Date.now(),
+          liveness: { installed: false, firstSeenTs: null },
         });
+
+        // Shared sinks capture console.* (never stdout) and record errors with full fidelity.
+        // Our onSend handles the hook-specific sends: install-status updates liveness; real
+        // invocations are recorded and set firstSeenTs on the first hit.
+        attachScriptSinks(script, sessionEntry.id, scriptId, {
+          onSend: (rawPayload, data) => {
+            const payload = rawPayload as HookAgentPayload | null;
+            if (payload && typeof payload.status === 'string') {
+              applyHookStatus(state.hooks.get(hookId), payload);
+              state.addMessageToScript(sessionEntry!.id, scriptId, { timestamp: Date.now(), type: 'hook_status', payload, data: data ?? null });
+              return;
+            }
+
+            state.addMessageToScript(sessionEntry!.id, scriptId, { timestamp: Date.now(), type: 'hook_invocation', payload, data: data ?? null });
+
+            const hook = state.hooks.get(hookId);
+            if (hook && payload) {
+              if (hook.liveness && !hook.liveness.firstSeenTs) hook.liveness.firstSeenTs = Date.now();
+              hook.invocations.push({
+                timestamp: Date.now(),
+                threadId: payload.threadId ?? 0,
+                args: payload.args ?? [],
+                retval: payload.retval,
+                backtrace: payload.backtrace ?? null,
+              });
+              if (hook.invocations.length > 1000) {
+                hook.invocations.splice(0, hook.invocations.length - 1000);
+              }
+            }
+          },
+        });
+
+        try {
+          await script.load();
+        } catch (loadErr) {
+          state.hooks.delete(hookId);
+          sessionEntry.scripts.delete(scriptId);
+          throw loadErr;
+        }
 
         log('info', `Hook installed on ${method} (hook: ${hookId})`);
 
@@ -275,6 +281,41 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
   );
 }
 
+/** Shape of the JSON payloads the hook agent scripts send() back to the host. */
+interface HookAgentPayload {
+  status?: 'hook_installed' | 'hook_error';
+  method?: string;
+  reason?: HookMissReason;
+  classResolved?: boolean;
+  overloads?: number;   // java: instrumented overload count
+  matches?: number;     // objc: matched class/selector count
+  resolved?: string;    // native: resolved address description
+  threadId?: number;
+  args?: unknown[];
+  retval?: unknown;
+  backtrace?: string[] | null;
+}
+
+/**
+ * Fold an agent install/error status message into the hook's liveness record, so the
+ * AI can later read whether the hook actually attached and why it did not.
+ */
+export function applyHookStatus(hook: HookEntry | undefined, payload: HookAgentPayload): void {
+  if (!hook || !hook.liveness) return;
+  const liveness = hook.liveness;
+  if (payload.status === 'hook_installed') {
+    liveness.installed = true;
+    if (typeof payload.classResolved === 'boolean') liveness.classResolved = payload.classResolved;
+    if (typeof payload.overloads === 'number') liveness.overloadsMatched = payload.overloads;
+    if (typeof payload.matches === 'number') liveness.matches = payload.matches;
+  } else if (payload.status === 'hook_error') {
+    liveness.installed = false;
+    if (typeof payload.classResolved === 'boolean') liveness.classResolved = payload.classResolved;
+    if (payload.reason) liveness.reason = payload.reason;
+    hook.status = 'error';
+  }
+}
+
 /** What getOrCreateSession needs to find or create the session a hook/trace attaches to. */
 export interface InstrumentationTarget {
   target: string;
@@ -297,6 +338,9 @@ export function resolveInstrumentationTarget(target: string | undefined, session
         { session_id: sessionId }
       );
     }
+    // Validate an explicitly-passed target even when reusing a session, so the input guard the
+    // process-scoped tools relied on is not silently dropped on the session_id path.
+    if (target) validateProcessTarget(target);
     return { target: target ?? sessionEntry.target, sessionId };
   }
   if (!target) {
@@ -384,13 +428,40 @@ const JAVA_HOOK_SCRIPT = `
   }
 
   if (!Java.available) {
-    send({ status: 'hook_error', method: o.method, error: 'Java runtime not available in this process' });
+    send({ status: 'hook_error', method: o.method, reason: 'NO_RUNTIME', classResolved: false, error: 'Java runtime not available in this process' });
     return;
+  }
+
+  // Resolve a class across every loaded class loader, not just the default one, so a
+  // class loaded by a plugin / split-dex / custom loader is still found.
+  function useInAnyLoader(name) {
+    try { return Java.use(name); } catch (first) { /* fall through to loader walk */ }
+    var found = null;
+    try {
+      Java.enumerateClassLoaders({
+        onMatch: function (loader) {
+          if (found) return;
+          try { found = Java.ClassFactory.get(loader).use(name); } catch (e) { /* not in this loader */ }
+        },
+        onComplete: function () {}
+      });
+    } catch (e) { /* enumerateClassLoaders unavailable */ }
+    return found;
   }
 
   Java.perform(function () {
     try {
-      var cls = Java.use(o.className);
+      var cls = useInAnyLoader(o.className);
+      if (cls === null) {
+        recordHookError(o.method, new Error('class not loaded: ' + o.className));
+        send({ status: 'hook_error', method: o.method, reason: 'CLASS_NOT_LOADED', classResolved: false, error: 'Class not loaded in any class loader: ' + o.className });
+        return;
+      }
+      if (typeof cls[o.methodName] === 'undefined' || !cls[o.methodName].overloads) {
+        recordHookError(o.method, new Error('no such method: ' + o.method));
+        send({ status: 'hook_error', method: o.method, reason: 'NO_SUCH_METHOD', classResolved: true, error: 'Method not found on class: ' + o.method });
+        return;
+      }
       var overloads = cls[o.methodName].overloads;
       overloads.forEach(function (overload) {
         overload.implementation = function () {
@@ -418,10 +489,10 @@ const JAVA_HOOK_SCRIPT = `
           return retval;
         };
       });
-      send({ status: 'hook_installed', method: o.method, overloads: overloads.length });
+      send({ status: 'hook_installed', method: o.method, classResolved: true, overloads: overloads.length });
     } catch (e) {
       recordHookError(o.method, e);
-      send({ status: 'hook_error', method: o.method, error: e.message });
+      send({ status: 'hook_error', method: o.method, reason: 'NO_SUCH_METHOD', error: e.message });
     }
   });
 })();
@@ -432,7 +503,7 @@ const OBJC_HOOK_SCRIPT = `
   var o = __FRIDA_MCP__.options;
 
   if (!ObjC.available) {
-    send({ status: 'hook_error', method: o.method, error: 'Objective-C runtime not available in this process' });
+    send({ status: 'hook_error', method: o.method, reason: 'NO_RUNTIME', classResolved: false, error: 'Objective-C runtime not available in this process' });
     return;
   }
 
@@ -440,7 +511,8 @@ const OBJC_HOOK_SCRIPT = `
     var resolver = new ApiResolver('objc');
     var matches = resolver.enumerateMatches(o.method);
     if (matches.length === 0) {
-      send({ status: 'hook_error', method: o.method, error: 'No matches found' });
+      send({ status: 'hook_error', method: o.method, reason: 'CLASS_NOT_LOADED', classResolved: false, matches: 0, error: 'No matches found for ' + o.method });
+      return;
     }
     matches.forEach(function (match) {
       Interceptor.attach(match.address, {
@@ -492,7 +564,7 @@ const NATIVE_HOOK_SCRIPT = `
   try {
     var addr = resolveTarget(o.nativeTarget || o.method);
     if (addr === null) {
-      send({ status: 'hook_error', method: o.method, error: 'target not found: ' + o.method });
+      send({ status: 'hook_error', method: o.method, reason: 'NO_EXPORT', error: 'target not found: ' + o.method });
       return;
     }
     // Resolved once at install time; every invocation payload reuses it.

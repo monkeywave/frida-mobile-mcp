@@ -52,18 +52,114 @@ export function formatToolResponse(
     };
   }
 
-  let text = renderText(result, format);
-
-  const limit = getCharacterLimit();
-  if (text.length > limit) {
-    text = text.slice(0, limit) +
-      '\n\n_...response truncated. Use pagination parameters (limit, offset/since) or switch to `response_format: "json"` for full data._';
-  }
+  // Keep the text channel under the character limit WITHOUT ever slicing a serialized
+  // structure mid-way (which turned a 342-module JSON response into unparseable text).
+  // Instead we trim the largest array in a clone and re-render, so the output stays valid
+  // JSON/TOON/Markdown; structuredContent below always carries the full, untrimmed result.
+  const text = fitRenderedResult(result, format, getCharacterLimit());
 
   return {
     content: [{ type: 'text', text }],
     structuredContent: { ...result } as Record<string, unknown>,
   };
+}
+
+/** A trimmable array on the cloned result payload, with its original length and current kept count. */
+interface ArrayHandle {
+  label: string;
+  originalLength: number;
+  kept: number;
+  /** Write the current `kept`-length slice back onto the clone's payload. */
+  apply(): void;
+  /** The current kept slice (for measuring its serialized size). */
+  slice(): unknown[];
+}
+
+/**
+ * Collect every trimmable array: the result payload itself (when it is an array) or each
+ * array-valued property. Operates on a shallow clone of the payload so the caller's original
+ * result (and thus structuredContent) is never mutated.
+ */
+function collectArrayHandles(clone: ToolResult): ArrayHandle[] {
+  const payload = clone.result;
+  if (Array.isArray(payload)) {
+    const arr = payload;
+    return [{ label: 'result', originalLength: arr.length, kept: arr.length, apply() { clone.result = arr.slice(0, this.kept); }, slice() { return arr.slice(0, this.kept); } }];
+  }
+  const handles: ArrayHandle[] = [];
+  if (payload && typeof payload === 'object') {
+    const obj: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
+    clone.result = obj;
+    for (const [k, v] of Object.entries(obj)) {
+      if (Array.isArray(v)) {
+        const arr = v;
+        handles.push({ label: k, originalLength: arr.length, kept: arr.length, apply() { obj[k] = arr.slice(0, this.kept); }, slice() { return arr.slice(0, this.kept); } });
+      }
+    }
+  }
+  return handles;
+}
+
+/**
+ * Render `result`, trimming to fit `limit` while always producing output valid in `format`.
+ * Repeatedly shrinks whichever array is currently largest, so a result with several big arrays
+ * (e.g. discover_crypto's java + native + candidates) is trimmed evenly instead of falling back
+ * to an empty envelope. structuredContent still carries the full, untrimmed data.
+ */
+function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: number): string {
+  let text = renderText(result, format);
+  if (text.length <= limit) return text;
+
+  const limitations: string[] = [...(result.limitations ?? [])];
+  const clone: ToolResult = { ...result, limitations };
+  const handles = collectArrayHandles(clone);
+
+  if (handles.length > 0) {
+    // Trim to a slightly tighter budget so the truncation note we add afterwards (which isn't
+    // present while measuring) does not push the result back over the real limit.
+    const budget = Math.max(limit - 400, Math.floor(limit / 2));
+    let guard = 0;
+    while (guard++ < 10_000) {
+      for (const h of handles) h.apply();
+      text = renderText(clone, format);
+      if (text.length <= budget) break;
+      // Shrink the array whose current slice serializes largest.
+      let largest: ArrayHandle | null = null;
+      let largestSize = -1;
+      for (const h of handles) {
+        if (h.kept <= 0) continue;
+        const size = JSON.stringify(h.slice())?.length ?? 0;
+        if (size > largestSize) { largestSize = size; largest = h; }
+      }
+      if (!largest) break; // everything trimmed to empty and still over budget
+      largest.kept = largest.kept > 20 ? Math.floor(largest.kept / 2) : largest.kept - 1;
+      if (largest.kept < 0) largest.kept = 0;
+    }
+
+    const trimmed = handles.filter((h) => h.kept < h.originalLength);
+    if (trimmed.length > 0) {
+      const parts = trimmed.map((h) => `${h.kept} of ${h.originalLength} \`${h.label}\``);
+      limitations.push(
+        `Result truncated to fit the ${limit}-char response limit: showing ${parts.join(', ')}. ` +
+          `Request the rest with pagination (limit/offset/since) or read the full structuredContent.`,
+      );
+      clone.coverage = { status: 'unknown', note: 'truncated to fit response limit' };
+    }
+    text = renderText(clone, format);
+    if (text.length <= limit) return text;
+  }
+
+  // Non-array fields alone exceed the limit: emit a minimal, valid envelope rather than an
+  // invalid sliced one. The complete data remains available in structuredContent.
+  const minimal: ToolResult = {
+    ...clone,
+    result: {
+      truncated: true,
+      note: 'Result exceeds the response character limit. Read structuredContent for the full data, or narrow the query / use pagination.',
+    },
+    coverage: { status: 'unknown', note: 'truncated to fit response limit' },
+  };
+  return renderText(minimal, format);
 }
 
 function renderText(data: ToolResult | ErrorResponse, format: ResponseFormat): string {

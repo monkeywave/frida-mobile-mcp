@@ -5,7 +5,7 @@ import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
-import { validateProcessTarget } from '../helpers/sanitize.js';
+import { resolveInstrumentationTarget } from './hook.js';
 import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
@@ -21,7 +21,8 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
       title: 'Bypass SSL Pinning',
       description: 'One-click SSL certificate pinning bypass for the target app. Auto-detects platform (Android/iOS) and applies the appropriate bypass techniques. On Android: hooks TrustManager, OkHttp CertificatePinner, and Conscrypt. On iOS: hooks SecTrust, ATS, and BoringSSL verification. Returns which bypass methods were successfully installed.',
       inputSchema: z.object({
-        target: z.string().describe('App bundle ID or process name'),
+        target: z.string().optional().describe('App bundle ID or process name. Optional when session_id is given.'),
+        session_id: z.string().optional().describe('Reuse an existing session (from explore_app/get_status) instead of re-attaching by target.'),
         device: z.string().optional().describe('Device ID'),
         response_format: responseFormatSchema,
       }),
@@ -33,16 +34,16 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
         openWorldHint: true,
       },
     },
-    async ({ target, device, response_format }) => {
+    async ({ target, session_id, device, response_format }) => {
       const startTime = Date.now();
       try {
-        validateProcessTarget(target);
+        const resolved = resolveInstrumentationTarget(target, session_id);
         const state = getState();
 
         rateLimiter.check('script', state.config.rateLimits.scriptsPerMinute);
         rateLimiter.record('script');
 
-        const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, { target, device });
+        const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, { target: resolved.target, device, sessionId: resolved.sessionId });
         let sessionEntry = resolvedSession;
 
         const platform = sessionEntry.platform;

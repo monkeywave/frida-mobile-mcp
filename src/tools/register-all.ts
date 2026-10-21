@@ -12,6 +12,9 @@ import { registerTraceTool } from './trace.js';
 import { registerScriptTool } from './script.js';
 import { registerPrebuiltTool } from './prebuilt.js';
 import { registerSearchTool } from './search.js';
+import { registerDiscoverTool } from './discover.js';
+import { registerWatchTool } from './watch.js';
+import { registerTriggerTool } from './trigger.js';
 import { registerMemoryTools } from './memory.js';
 import { registerSslTool } from './ssl.js';
 import { registerMessagesTool } from './messages.js';
@@ -46,12 +49,15 @@ export function registerTier1Tools(server: McpServer, deviceManager: DeviceManag
   registerScriptTool(server, deviceManager);
   registerPrebuiltTool(server, deviceManager);
   registerSearchTool(server, deviceManager);
+  registerDiscoverTool(server, deviceManager);
+  registerWatchTool(server, deviceManager);
   registerMemoryTools(server);
   registerSslTool(server, deviceManager);
   registerFritapTool(server, deviceManager);
   registerMessagesTool(server);
   registerCleanupTool(server);
   registerMobileTool(server);
+  registerTriggerTool(server);
   registerDetectTool(server, deviceManager);
   registerValidateTool(server);
 }

@@ -123,6 +123,21 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
           type: h.type,
           status: h.status,
           invocations: h.invocations.length,
+          // Liveness: did it actually attach, and has it ever fired? `fired:false` with
+          // `installed:true` is the silent-miss signal (hooked, but the code path never ran);
+          // `installed:false` with a `reason` means the target itself was wrong.
+          ...(h.liveness
+            ? {
+                liveness: {
+                  installed: h.liveness.installed,
+                  fired: !!h.liveness.firstSeenTs,
+                  ...(h.liveness.classResolved !== undefined ? { class_resolved: h.liveness.classResolved } : {}),
+                  ...(h.liveness.overloadsMatched !== undefined ? { overloads_matched: h.liveness.overloadsMatched } : {}),
+                  ...(h.liveness.matches !== undefined ? { matches: h.liveness.matches } : {}),
+                  ...(h.liveness.reason ? { reason: h.liveness.reason } : {}),
+                },
+              }
+            : {}),
         }));
 
         // Traces

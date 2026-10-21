@@ -77,10 +77,10 @@ describe('bypass_ssl_pinning MCP tool', () => {
     expect(parsed.result.message).toMatch(/will activate on next network request/);
   });
 
-  it('rejects an empty target before touching the device', async () => {
+  it('rejects an empty target with no session to fall back on, before touching the device', async () => {
     const parsed = await callJson(client, 'bypass_ssl_pinning', { target: '' });
     expect(parsed.error).toBeDefined();
-    expect(parsed.error.message).toMatch(/target cannot be empty/i);
+    expect(parsed.error.message).toMatch(/provide target.*or session_id/i);
   });
 
   it('enforces the per-minute script rate limit', async () => {

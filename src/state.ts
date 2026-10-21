@@ -35,6 +35,10 @@ class ServerState {
   private lastCleanupAt: number = 0;
   private cleanupTimer: NodeJS.Timeout | null = null;
   private crashWatchedDevices: Set<string> = new Set();
+  /** Session-global monotonic message counter; see MessageEntry.seq. */
+  private messageSeq: number = 0;
+  /** Pending waiters resolved as messages arrive; see waitForNewMessages. */
+  private messageWaiters: Set<MessageWaiter> = new Set();
 
   constructor(config: FridaMcpConfig) {
     this.deviceManager = frida.getDeviceManager();
@@ -108,20 +112,73 @@ class ServerState {
     }
   }
 
-  addMessageToScript(sessionId: string, scriptId: string, message: Omit<MessageEntry, 'index'>): void {
+  addMessageToScript(sessionId: string, scriptId: string, message: Omit<MessageEntry, 'index' | 'seq'>): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     const script = session.scripts.get(scriptId);
     if (!script) return;
 
     const index = nextMessageIndex(script);
-    script.messages.push({ ...message, index });
+    const seq = ++this.messageSeq;
+    script.messages.push({ ...message, index, seq });
     session.lastActivityAt = Date.now();
 
     // Batch eviction: trim when 10% over limit to avoid splice on every message
     const evictionThreshold = Math.floor(this.config.maxMessageBuffer * 1.1);
     if (script.messages.length > evictionThreshold) {
       script.messages = script.messages.slice(-this.config.maxMessageBuffer);
+    }
+
+    this.notifyMessageWaiters();
+  }
+
+  /** The current global message cursor; pass to waitForNewMessages as the "after" point. */
+  currentMessageSeq(): number {
+    return this.messageSeq;
+  }
+
+  /** Count messages in a session whose global seq is strictly greater than `afterSeq`. */
+  countMessagesSince(sessionId: string, afterSeq: number): number {
+    const session = this.sessions.get(sessionId);
+    if (!session) return 0;
+    let count = 0;
+    for (const script of session.scripts.values()) {
+      for (const m of script.messages) if (m.seq > afterSeq) count++;
+    }
+    return count;
+  }
+
+  /**
+   * Resolve once a session has at least `minCount` messages with seq > `afterSeq`, or after
+   * `timeoutMs`. This is the event-driven half of trigger_and_wait: perform a UI action, then
+   * wait to learn whether it actually drove any instrumented code (a hook firing) — turning
+   * "tap and poll blindly" into a single correlated round-trip. Resolves `true` if the count
+   * was reached, `false` on timeout.
+   */
+  waitForNewMessages(sessionId: string, afterSeq: number, minCount: number, timeoutMs: number): Promise<boolean> {
+    if (this.countMessagesSince(sessionId, afterSeq) >= minCount) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const waiter: MessageWaiter = {
+        check: () => this.countMessagesSince(sessionId, afterSeq) >= minCount,
+        settle: (reached: boolean) => {
+          if (waiter.done) return;
+          waiter.done = true;
+          clearTimeout(timer);
+          this.messageWaiters.delete(waiter);
+          resolve(reached);
+        },
+        done: false,
+      };
+      const timer = setTimeout(() => waiter.settle(false), timeoutMs);
+      timer.unref?.();
+      this.messageWaiters.add(waiter);
+    });
+  }
+
+  private notifyMessageWaiters(): void {
+    if (this.messageWaiters.size === 0) return;
+    for (const waiter of [...this.messageWaiters]) {
+      if (waiter.check()) waiter.settle(true);
     }
   }
 
@@ -277,6 +334,13 @@ class ServerState {
       await disconnectMobileMcp();
     } catch { /* mobile-mcp may never have been started */ }
   }
+}
+
+/** A pending waiter registered by waitForNewMessages. */
+interface MessageWaiter {
+  check: () => boolean;
+  settle: (reached: boolean) => void;
+  done: boolean;
 }
 
 /** Monotonic per-script message index that survives buffer trimming. */

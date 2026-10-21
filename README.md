@@ -71,6 +71,9 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `detect_app_technologies` | Fingerprint libraries, frameworks and security mechanisms; returns recommended script targets. |
 | `explore_app` | Spawn an app suspended, instrument, resume; returns pid, platform, modules and a filtered class list. |
 | `search_classes_and_methods` | Regex search over classes (and methods with `include_methods`) in a running app. |
+| `discover_crypto` | Find where an app does crypto (or any API family) without assuming `javax.crypto`: ranked candidate hook targets across Java/ObjC classes and native symbols. |
+| `watch_loads` | Watch for late-loaded `.so` libraries and Java classes, plus anti-Frida probes; emits `watch_event` messages as the app runs. |
+| `trigger_and_wait` | Perform a UI action and block until the resulting hook/message output arrives, so you learn which hook a tap fired (or that none did). |
 | `hook_method` | Hook Java (`com.example.Class.method`), ObjC (`-[Class sel:]`) or native targets (`libssl.so!SSL_read`, `libfoo.so+0x1234`, `0x7f...`, `!open`) with auto session management; backtraces as `module+0xoff (symbol)`. |
 | `trace_method` | frida-trace style tracing of glob patterns (`com.example.net.*`, `-[NSURL*]`, `libssl.so!SSL_*`) for a duration. |
 | `execute_script` | Run a custom script: classic JS (bridges injected), ES module JS/TS (compiled with the Frida Compiler) or a frida-compile bundle. `timeout_ms` bounds the initial run. Requires `allowCustomScripts`. |

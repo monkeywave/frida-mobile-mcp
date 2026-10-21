@@ -98,6 +98,18 @@
       "description": "Search for classes and their methods by pattern in a running app"
     },
     {
+      "name": "discover_crypto",
+      "description": "Find where an app performs cryptography (or any API family) without assuming javax.crypto: ranked candidate hook targets across Java/ObjC classes and native symbols"
+    },
+    {
+      "name": "watch_loads",
+      "description": "Watch for late-loaded native libraries and Java classes, and anti-instrumentation (anti-Frida) probes, emitting events into the session message buffer"
+    },
+    {
+      "name": "trigger_and_wait",
+      "description": "Perform a UI action and wait for the resulting instrumentation output, correlating a trigger with the hooks it fires"
+    },
+    {
       "name": "read_memory",
       "description": "Read raw memory from a target process"
     },
