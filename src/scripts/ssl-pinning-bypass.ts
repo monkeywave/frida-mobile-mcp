@@ -200,7 +200,7 @@ const BODY = buildTemplateBody('ssl_pinning_bypass', `
 
 export const sslPinningBypassTemplate: ScriptTemplate = {
   name: 'ssl_pinning_bypass',
-  description: 'Bypass SSL certificate pinning. Android: TrustManager, OkHttp, Conscrypt. iOS: SecTrust, ATS, BoringSSL.',
+  description: 'Bypass SSL certificate pinning. Android: TrustManager, OkHttp (3/4), Conscrypt, WebView. iOS: SecTrust (also covers ATS), BoringSSL, AFNetworking.',
   platforms: ['android', 'ios'],
   category: 'bypass',
   riskTier: 2,

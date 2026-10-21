@@ -11,3 +11,4 @@ script_archive/
 .DS_Store
 coverage/
 .vitest/
+./mcp-publisher

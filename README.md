@@ -83,6 +83,7 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `scan_memory` | Byte-pattern scan (`48 89 5c 24 ?? 57`), optionally limited to a module. |
 | `get_messages` | Buffered hook invocations, trace hits, `send()` output and errors; `since` paginates. |
 | `stop_instrumentation` | Remove all hooks, scripts and traces on a target and detach. |
+| `unload_script` | Unload a single script (hook, trace or custom) from a session while keeping it attached. |
 | `mobile_action` | Gateway to mobile-mcp UI automation (screenshot, elements, tap, swipe, type, launch app, list apps). |
 
 ### Tier 2: advanced primitives
@@ -125,9 +126,9 @@ The server also exposes `frida://` resources (version, devices, processes, apps,
 | `ssl_pinning_bypass` | Bypass certificate pinning (TrustManager, OkHttp, Conscrypt, WebView; SecTrust, ATS, BoringSSL, AFNetworking) |
 | `root_jailbreak_bypass` | Bypass root/jailbreak detection (Java, SystemProperties, native fopen/access/stat, canOpenURL, sysctl) |
 | `class_enumeration` | List loaded Java/ObjC classes with a regex filter, optionally with methods |
-| `method_hook` | Generic method hook with argument and return value logging |
+| `method_hook` | Generic method hook (Java/ObjC methods or a native `target`) with argument and return value logging |
 | `crypto_monitor` | javax.crypto, CommonCrypto and OpenSSL calls |
-| `network_inspector` | Sockets, DNS, UDP and SSL_read/SSL_write plaintext |
+| `network_inspector` | Sockets, DNS, UDP and TLS SSL_read/SSL_write (plaintext bytes with `log_data`) |
 | `keychain_prefs` | iOS Keychain and Android SharedPreferences access |
 | `filesystem_monitor` | File I/O and SQLite |
 

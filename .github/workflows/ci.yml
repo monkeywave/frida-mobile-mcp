@@ -40,7 +40,9 @@ jobs:
 
       - run: npm run lint
 
-      - run: npm test
+      # Run the suite with the coverage gate on every combo; v8 overhead is small and the
+      # gate then protects all platforms/Node versions (no fragile single-combo condition).
+      - run: npm run test:coverage
 
       - name: Smoke test CLI entrypoint
         run: node dist/index.js --help

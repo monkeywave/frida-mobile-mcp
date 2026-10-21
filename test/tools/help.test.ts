@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeAll } from 'vitest';
 // Import the module to check the HELP_TOPICS map
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { getRegisteredToolNames } from '../helpers/mock-fixtures.js';
 
 describe('frida_help tool', () => {
   let helpFileContent: string;
@@ -69,20 +70,13 @@ describe('frida_help tool', () => {
     expect(helpFileContent).toContain('capture_tls');
   });
 
-  it('covers every registered tool in some topic', () => {
-    const allTools = [
-      'get_status', 'frida_help', 'detect_app_technologies', 'explore_app', 'search_classes_and_methods',
-      'hook_method', 'trace_method', 'execute_script', 'validate_script', 'run_prebuilt_script',
-      'bypass_ssl_pinning', 'capture_tls', 'read_memory', 'write_memory', 'scan_memory',
-      'get_messages', 'stop_instrumentation', 'unload_script', 'mobile_action',
-      'list_devices', 'select_device', 'get_device_info', 'list_processes', 'list_applications',
-      'get_frontmost_application', 'spawn_process', 'attach_process', 'resume_process', 'kill_process',
-      'detach_session', 'list_sessions', 'enumerate_modules', 'enumerate_exports', 'enumerate_imports',
-      'enumerate_symbols', 'resolve_address', 'analyze_native_function', 'dump_module_memory',
-      'list_threads', 'hook_function', 'unhook_function',
-    ];
-    expect(allTools).toHaveLength(41);
-    for (const tool of allTools) {
+  it('covers every registered tool in some topic', async () => {
+    // Derived from the live tool registry (register-all.ts) rather than a hardcoded list, so
+    // adding or renaming a tool fails here unless help.ts is updated too. The tool-list sync
+    // test (tool-sync.test.ts) enforces the same against manifest.json and README.
+    const registered = await getRegisteredToolNames();
+    expect(registered.length).toBeGreaterThan(30);
+    for (const tool of registered) {
       expect(helpFileContent, `help.ts should mention ${tool}`).toContain(tool);
     }
   });

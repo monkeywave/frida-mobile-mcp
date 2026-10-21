@@ -4,6 +4,9 @@ import { buildTemplateBody } from './template-body.js';
 // NOTE: this is a TS template literal. A regex that must contain a backslash in the emitted
 // script needs a doubled backslash here (e.g. `\\/` emits `\/`, `\\\\.` emits `\\.`).
 const BODY = buildTemplateBody('root_jailbreak_bypass', `
+  var o = templateOptions();
+  var bypassDebugger = o.bypass_debugger === true;
+
   if (Java.available) {
     Java.perform(function() {
       var rootPaths = ['/system/app/Superuser.apk', '/sbin/su', '/system/bin/su', '/system/xbin/su', '/data/local/xbin/su', '/data/local/bin/su', '/system/sd/xbin/su', '/system/bin/failsafe/su', '/data/local/su', '/su/bin/su', '/sbin/magisk', '/sbin/.magisk', '/data/adb/magisk', '/data/adb/modules', '/system/xbin/daemonsu'];
@@ -198,19 +201,41 @@ const BODY = buildTemplateBody('root_jailbreak_bypass', `
       onEnter: function(args) {
         try {
           var mib = args[0];
+          var namelen = args[1].toInt32();
           var mib0 = mib.readS32();
           var mib1 = mib.add(4).readS32();
-          this.isKernProc = (mib0 === 1 && mib1 === 14); // CTL_KERN, KERN_PROC
-        } catch (e) { this.isKernProc = false; }
+          var mib2 = namelen > 2 ? mib.add(8).readS32() : -1;
+          // The anti-debug check is sysctl({CTL_KERN, KERN_PROC, KERN_PROC_PID, pid}); only that
+          // form returns a single kinfo_proc whose p_flag we can patch at a fixed offset.
+          // KERN_PROC_ALL and friends return an array and must not be touched this way.
+          this.isProcPidQuery = (mib0 === 1 && mib1 === 14 && mib2 === 1); // CTL_KERN, KERN_PROC, KERN_PROC_PID
+          this.oldp = args[2]; // oldp: pointer to the kinfo_proc the caller receives
+        } catch (e) { this.isProcPidQuery = false; }
       },
       onLeave: function(retval) {
-        if (this.isKernProc) {
-          try {
-            // Remove P_TRACED flag from p_flag
-            // Not modifying here to avoid instability — just report
-            send({ status: 'detected', method: 'sysctl.KERN_PROC', platform: 'ios' });
-          } catch (e) {}
-        }
+        if (!this.isProcPidQuery) return;
+        try {
+          // Only a successful call has a fully populated kinfo_proc to read/patch.
+          if (retval.toInt32() !== 0 || !this.oldp || this.oldp.isNull()) {
+            send({ status: 'detected', method: 'sysctl.KERN_PROC_PID', platform: 'ios' });
+            return;
+          }
+          if (bypassDebugger) {
+            // kinfo_proc.kp_proc.p_flag sits at offset 0x20 on 64-bit Darwin; P_TRACED = 0x800.
+            var P_TRACED = 0x800;
+            var pFlagPtr = this.oldp.add(0x20);
+            var flags = pFlagPtr.readU32();
+            if (flags & P_TRACED) {
+              pFlagPtr.writeU32(flags & ~P_TRACED);
+              send({ status: 'bypassed', method: 'sysctl.KERN_PROC_PID', detail: 'cleared P_TRACED', platform: 'ios' });
+            } else {
+              send({ status: 'detected', method: 'sysctl.KERN_PROC_PID', detail: 'P_TRACED not set', platform: 'ios' });
+            }
+          } else {
+            // Report-only by default; enable bypass_debugger to strip P_TRACED (may be unstable).
+            send({ status: 'detected', method: 'sysctl.KERN_PROC_PID', platform: 'ios' });
+          }
+        } catch (e) {}
       }
     });
 
@@ -224,5 +249,12 @@ export const rootJailbreakBypassTemplate: ScriptTemplate = {
   platforms: ['android', 'ios'],
   category: 'bypass',
   riskTier: 2,
+  options: {
+    bypass_debugger: {
+      type: 'boolean',
+      description: 'iOS only: actively strip the P_TRACED flag in sysctl(KERN_PROC) results to defeat anti-debug checks. Off by default (report-only), because patching the returned struct can be unstable.',
+      default: false,
+    },
+  },
   generate: () => BODY,
 };

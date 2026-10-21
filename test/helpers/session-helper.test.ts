@@ -11,58 +11,16 @@ import frida from 'frida';
 import { getOrCreateSession, findRunningPid } from '../../src/helpers/session-helper.js';
 import { initState, getState } from '../../src/state.js';
 import { FridaMcpError } from '../../src/helpers/errors.js';
-import type { FridaMcpConfig, SessionEntry } from '../../src/types.js';
-
-const TEST_CONFIG: FridaMcpConfig = {
-  allowCustomScripts: false,
-  memoryWriteEnabled: false,
-  allowedDevices: [],
-  maxSessions: 2,
-  sessionTimeoutMinutes: 30,
-  maxMessageBuffer: 100,
-  auditLogPath: '',
-  mobileMcp: { enabled: false, command: '', args: [] },
-  rateLimits: { scriptsPerMinute: 10, memoryReadsPerMinute: 10, sessionsPerMinute: 10 },
-};
-
-const SPAWNED_PID = 4242;
-const TARGET = 'com.example.app';
-
-function makeSession() {
-  return {
-    detached: { connect: vi.fn() },
-    detach: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-function makeDevice(over: Record<string, unknown> = {}) {
-  const session = makeSession();
-  return {
-    id: 'dev1',
-    name: 'Dev',
-    type: 'usb',
-    enumerateApplications: vi.fn().mockResolvedValue([]),
-    enumerateProcesses: vi.fn().mockResolvedValue([]),
-    spawn: vi.fn().mockResolvedValue(SPAWNED_PID),
-    attach: vi.fn().mockResolvedValue(session),
-    resume: vi.fn().mockResolvedValue(undefined),
-    kill: vi.fn().mockResolvedValue(undefined),
-    processCrashed: { connect: vi.fn() },
-    querySystemParameters: vi.fn().mockResolvedValue({ platform: 'android' }),
-    ...over,
-    _session: session,
-  };
-}
-
-type FakeDevice = ReturnType<typeof makeDevice>;
-
-function makeDeviceManager(device: FakeDevice) {
-  return {
-    resolve: vi.fn().mockResolvedValue(device),
-    getDevice: vi.fn().mockResolvedValue(device),
-    detectPlatform: vi.fn().mockResolvedValue('android'),
-  } as any;
-}
+import type { SessionEntry } from '../../src/types.js';
+import {
+  makeDevice,
+  makeDeviceManager,
+  makeSession,
+  SPAWNED_PID,
+  TARGET,
+  TEST_CONFIG,
+  type FakeDevice,
+} from './mock-fixtures.js';
 
 function makeFakeEntry(over: Partial<SessionEntry> = {}): SessionEntry {
   const now = Date.now();

@@ -28,22 +28,32 @@ const BODY = buildTemplateBody('filesystem_monitor', `
     }
   });
 
-  // Hook read
+  // Hook read (buffer is filled by the time read() returns).
   hookNative(null, 'read', {
-    onEnter: function(args) { this.fd = args[0].toInt32(); this.size = args[2].toInt32(); },
+    onEnter: function(args) { this.fd = args[0].toInt32(); this.buf = args[1]; this.size = args[2].toInt32(); },
     onLeave: function(retval) {
       var bytesRead = retval.toInt32();
       if (bytesRead > 0) {
-        send({ api: 'read', fd: this.fd, requested: this.size, read: bytesRead });
+        var info = { api: 'read', fd: this.fd, requested: this.size, read: bytesRead };
+        if (logData && this.buf) { try { info.data = toHex(this.buf.readByteArray(Math.min(bytesRead, 256))); } catch (e) {} }
+        send(info);
       }
     }
   });
 
-  // Hook write
+  // Hook write (input buffer stays valid across the call; log the bytes actually written so
+  // the data matches the written count on a partial write — size stays the requested count).
   hookNative(null, 'write', {
-    onEnter: function(args) { this.fd = args[0].toInt32(); this.size = args[2].toInt32(); },
+    onEnter: function(args) {
+      this.fd = args[0].toInt32();
+      this.size = args[2].toInt32();
+      if (logData) this.buf = args[1];
+    },
     onLeave: function(retval) {
-      send({ api: 'write', fd: this.fd, size: this.size, written: retval.toInt32() });
+      var written = retval.toInt32();
+      var info = { api: 'write', fd: this.fd, size: this.size, written: written };
+      if (logData && this.buf && written > 0) { try { info.data = toHex(this.buf.readByteArray(Math.min(written, 256))); } catch (e) {} }
+      send(info);
     }
   });
 
@@ -164,7 +174,7 @@ export const filesystemMonitorTemplate: ScriptTemplate = {
   riskTier: 1,
   options: {
     filter_path: { type: 'string', description: 'Regex filter for file paths' },
-    log_data: { type: 'boolean', description: 'Log file data content', default: false },
+    log_data: { type: 'boolean', description: 'Log read/write payload bytes (hex, bounded to 256 bytes). The read/write hooks are fd-based (filter_path cannot narrow them), so this can be noisy on busy processes — enable it when you need payloads, not for broad monitoring.', default: false },
   },
   generate: () => BODY,
 };

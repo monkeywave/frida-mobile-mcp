@@ -13,10 +13,6 @@ const BODY = buildTemplateBody('network_inspector', `
     return !hostFilter || hostFilter.test(String(host));
   }
 
-  function toHex(buffer) {
-    return Array.from(new Uint8Array(buffer)).map(function(b) { return ('0' + b.toString(16)).slice(-2); }).join('').slice(0, 512);
-  }
-
   // Hook connect
   hookNative(null, 'connect', {
     onEnter: function(args) {
@@ -104,27 +100,37 @@ const BODY = buildTemplateBody('network_inspector', `
   // TLS library name — shared by SSL_read and SSL_write hooks
   var sslLib = Process.platform === 'darwin' ? 'libboringssl.dylib' : 'libssl.so';
 
-  // TLS plaintext — SSL_read
+  // TLS plaintext — SSL_read (buffer is filled by the time SSL_read returns).
   hookNative(sslLib, 'SSL_read', {
-    onEnter: function(args) { try { this.ssl = args[0]; this.size = args[2].toInt32(); } catch (e) {} },
+    onEnter: function(args) { this.buf = args[1]; },
     onLeave: function(retval) {
       var read = retval.toInt32();
-      if (read > 0) send({ api: 'SSL_read', size: read });
+      if (read > 0) {
+        var info = { api: 'SSL_read', size: read };
+        if (logData && this.buf) { try { info.data = toHex(this.buf.readByteArray(Math.min(read, 256))); } catch (e) {} }
+        send(info);
+      }
     }
   });
 
-  // TLS plaintext — SSL_write
+  // TLS plaintext — SSL_write (input buffer stays valid across the call; read the bytes that
+  // were actually written in onLeave so the reported size and data agree on a partial write).
   hookNative(sslLib, 'SSL_write', {
-    onEnter: function(args) { try { this.size = args[2].toInt32(); } catch (e) {} },
+    onEnter: function(args) { if (logData) this.buf = args[1]; },
     onLeave: function(retval) {
-      if (retval.toInt32() > 0) send({ api: 'SSL_write', size: retval.toInt32() });
+      var written = retval.toInt32();
+      if (written > 0) {
+        var info = { api: 'SSL_write', size: written };
+        if (logData && this.buf) { try { info.data = toHex(this.buf.readByteArray(Math.min(written, 256))); } catch (e) {} }
+        send(info);
+      }
     }
   });
 `);
 
 export const networkInspectorTemplate: ScriptTemplate = {
   name: 'network_inspector',
-  description: 'Monitor network socket operations including connect, send, recv. Logs addresses, ports, and data sizes.',
+  description: 'Monitor network socket operations (connect, send, recv, DNS, UDP) and TLS SSL_read/SSL_write. Logs addresses, ports and sizes; set log_data to also capture plaintext/payload bytes (hex, bounded).',
   platforms: ['android', 'ios'],
   category: 'network',
   riskTier: 1,

@@ -1,87 +1,37 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { Client } from '@modelcontextprotocol/client';
-import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { registerCleanupTool } from '../../src/tools/cleanup.js';
 import { registerHookTool } from '../../src/tools/hook.js';
 import { registerTraceTool } from '../../src/tools/trace.js';
-import { initState, getState, type ServerState } from '../../src/state.js';
+import { initState, getState } from '../../src/state.js';
 import { loadConfig } from '../../src/config.js';
 import type { DeviceManager } from '../../src/device/manager.js';
-import type { SessionEntry, ScriptEntry } from '../../src/types.js';
-
-type Json = Record<string, any>;
+import {
+  callJson,
+  fakeScript,
+  makeMcpHarness,
+  scriptEntry,
+  seedHook,
+  seedSession,
+  seedTrace,
+  type Json,
+  type McpHarness,
+} from '../helpers/mock-fixtures.js';
 
 const SESSION_ID = 'sess-1';
 const SCRIPT_ID = 'script-1';
 const OTHER_SCRIPT_ID = 'script-2';
 
-interface FakeScript {
-  isDestroyed: boolean;
-  unloadCalls: number;
-  unload: () => Promise<void>;
-}
-
-function fakeScript(options: { failWith?: string; destroyed?: boolean } = {}): FakeScript {
-  const script: FakeScript = {
-    isDestroyed: options.destroyed ?? false,
-    unloadCalls: 0,
-    async unload() {
-      script.unloadCalls++;
-      if (options.failWith) throw new Error(options.failWith);
-      script.isDestroyed = true;
-    },
-  };
-  return script;
-}
-
-function scriptEntry(id: string, script: FakeScript, name = `hook:${id}`): ScriptEntry {
-  return { id, script: script as unknown as ScriptEntry['script'], messages: [], name, persistent: true, createdAt: Date.now() };
-}
-
-function seedSession(state: ServerState, scripts: ScriptEntry[]): SessionEntry {
-  const entry = {
-    id: SESSION_ID,
-    session: { detach: async () => undefined },
-    pid: 4242,
-    deviceId: 'emulator-5554',
-    target: 'com.example.app',
-    platform: 'android',
-    scripts: new Map(scripts.map((s) => [s.id, s])),
-    createdAt: Date.now(),
-  } as unknown as SessionEntry;
-  state.sessions.set(entry.id, entry);
-  return entry;
-}
-
-function seedHook(state: ServerState, id: string, scriptId: string): void {
-  state.hooks.set(id, { id, scriptId, sessionId: SESSION_ID, target: 'm', type: 'java', invocations: [], status: 'active', createdAt: Date.now() });
-}
-
-function seedTrace(state: ServerState, id: string, scriptId: string): void {
-  state.traces.set(id, { id, scriptId, sessionId: SESSION_ID, targets: ['m'], callCount: 0, startedAt: Date.now() });
-}
-
-async function callJson(client: Client, name: string, args: Record<string, unknown>): Promise<Json> {
-  const response = (await client.callTool({ name, arguments: { ...args, response_format: 'json' } })) as Json;
-  return JSON.parse(response.content[0].text);
-}
-
 describe('unload_script MCP tool', () => {
-  let client: Client;
-  let server: McpServer;
+  let client: McpHarness['client'];
+  let close: McpHarness['close'];
 
   beforeAll(async () => {
     initState(loadConfig({ mobileMcp: { enabled: false } } as any));
-    server = new McpServer({ name: 't', version: '0' });
-    registerCleanupTool(server);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    client = new Client({ name: 'test-client', version: '0' });
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    ({ client, close } = await makeMcpHarness((server) => registerCleanupTool(server)));
   });
 
   afterAll(async () => {
-    await client.close();
-    await server.close();
+    await close();
     getState().stopCleanupTimer();
   });
 
@@ -181,24 +131,21 @@ describe('unload_script MCP tool', () => {
 });
 
 describe('hook_method / trace_method target and session_id validation', () => {
-  let client: Client;
-  let server: McpServer;
+  let client: McpHarness['client'];
+  let close: McpHarness['close'];
   // Validation fails before the device manager is touched, so a stub is enough.
   const deviceManager = {} as unknown as DeviceManager;
 
   beforeAll(async () => {
     initState(loadConfig({ mobileMcp: { enabled: false } } as any));
-    server = new McpServer({ name: 't', version: '0' });
-    registerHookTool(server, deviceManager);
-    registerTraceTool(server, deviceManager);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    client = new Client({ name: 'test-client', version: '0' });
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    ({ client, close } = await makeMcpHarness((server) => {
+      registerHookTool(server, deviceManager);
+      registerTraceTool(server, deviceManager);
+    }));
   });
 
   afterAll(async () => {
-    await client.close();
-    await server.close();
+    await close();
     getState().stopCleanupTimer();
   });
 

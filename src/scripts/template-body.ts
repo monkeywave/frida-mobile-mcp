@@ -36,6 +36,15 @@ function templateOptions() {
   var ctx = (typeof __FRIDA_MCP__ === 'object' && __FRIDA_MCP__) ? __FRIDA_MCP__ : {};
   return ctx.options || {};
 }
+
+// Shared bytes -> lowercase hex formatter for log_data output; bounded to maxBytes (default 256).
+function toHex(buffer, maxBytes) {
+  var bytes = new Uint8Array(buffer);
+  var limit = typeof maxBytes === 'number' ? Math.min(bytes.length, maxBytes) : bytes.length;
+  var out = '';
+  for (var i = 0; i < limit; i++) out += ('0' + bytes[i].toString(16)).slice(-2);
+  return out;
+}
 `;
 
 /**

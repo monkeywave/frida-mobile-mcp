@@ -147,7 +147,7 @@ const BODY = buildTemplateBody('crypto_monitor', `
 
 export const cryptoMonitorTemplate: ScriptTemplate = {
   name: 'crypto_monitor',
-  description: 'Monitor cryptographic API calls. Android: javax.crypto.Cipher, MessageDigest. iOS: CCCrypt, SecKey. Native: EVP_* (OpenSSL).',
+  description: 'Monitor cryptographic API calls. Android: javax.crypto Cipher/MessageDigest/Mac. iOS: CommonCrypto (CCCrypt, CC_SHA256, CC_MD5). Native: EVP_* (OpenSSL).',
   platforms: ['android', 'ios'],
   category: 'crypto',
   riskTier: 1,

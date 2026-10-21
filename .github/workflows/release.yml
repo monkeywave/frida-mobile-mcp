@@ -20,6 +20,10 @@ jobs:
       - uses: googleapis/release-please-action@v5
         id: release
         with:
+          # Prefer a GitHub App token / fine-grained PAT (secret RELEASE_PLEASE_TOKEN) so the
+          # release PR is opened under an identity whose events trigger CI; fall back to the
+          # default GITHUB_TOKEN when the secret is absent.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -35,8 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      id-token: write
-      contents: read
+      id-token: write      # npm trusted publishing (OIDC) + MCP registry GitHub OIDC login
+      contents: write      # upload the .mcpb bundle as a GitHub release asset
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,3 +64,24 @@ jobs:
       - run: npm test
 
       - run: npm publish --provenance --access public
+
+      # Build the MCPB bundle (.mcpb) from manifest.json and attach it to the GitHub release
+      # so it can be installed in one click by MCPB-aware clients.
+      - name: Build MCPB bundle
+        run: npx --yes @anthropic-ai/mcpb pack . frida-mobile-mcp.mcpb
+
+      - name: Attach MCPB bundle to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" frida-mobile-mcp.mcpb --clobber
+
+      # Publish server.json to the official MCP registry, authenticating via GitHub OIDC
+      # (OIDC from this repo grants the io.github.monkeywave/* namespace).
+      # The ubuntu-latest runner is linux/amd64; mcp-publisher is pinned for reproducibility.
+      - name: Publish to the MCP registry
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+          ./mcp-publisher validate
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

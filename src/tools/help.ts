@@ -132,16 +132,16 @@ Dump a whole loaded module (e.g. an unpacked/decrypted library) to a base-relati
 ## Pre-built scripts (use run_prebuilt_script)
 
 ### Security Bypass
-- \`ssl_pinning_bypass\` — Bypass SSL certificate pinning (Android: TrustManager, OkHttp, Conscrypt; iOS: SecTrust, ATS, BoringSSL)
-- \`root_jailbreak_bypass\` — Bypass root/jailbreak detection
+- \`ssl_pinning_bypass\` — Bypass SSL certificate pinning (Android: TrustManager, OkHttp, Conscrypt, WebView; iOS: SecTrust/ATS, BoringSSL, AFNetworking)
+- \`root_jailbreak_bypass\` — Bypass root/jailbreak detection (iOS \`bypass_debugger\` option strips P_TRACED)
 
 ### Enumeration
 - \`class_enumeration\` — List all loaded Java/ObjC classes with regex filter
 
 ### Monitoring
-- \`method_hook\` — Generic method hook with argument and return value logging
+- \`method_hook\` — Generic method hook (Java/ObjC methods or a native \`target\`) with argument and return value logging
 - \`crypto_monitor\` — Monitor crypto API calls (javax.crypto, CommonCrypto, OpenSSL)
-- \`network_inspector\` — Monitor network socket operations
+- \`network_inspector\` — Monitor network socket operations and TLS (plaintext with \`log_data\`)
 - \`keychain_prefs\` — Monitor iOS Keychain / Android SharedPreferences access
 - \`filesystem_monitor\` — Monitor file system I/O operations
 

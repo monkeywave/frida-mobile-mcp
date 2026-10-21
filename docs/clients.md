@@ -81,6 +81,13 @@ frida-mobile-mcp setup --client claude-code
 
 The sections below show the resulting configuration for each client if you prefer to edit by hand.
 
+## One-click install (.mcpb)
+
+Each GitHub release attaches an `frida-mobile-mcp.mcpb` bundle. MCPB-aware clients (e.g. Claude
+Desktop) can install it in one click from the release page — no manual config needed. The server is
+also published to the [MCP registry](https://github.com/modelcontextprotocol/registry) as
+`io.github.monkeywave/frida-mobile-mcp` for clients that browse the registry.
+
 ## Claude Desktop
 
 Config file:
