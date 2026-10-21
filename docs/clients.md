@@ -49,7 +49,7 @@ Options:
 
 `frida-mobile-mcp doctor` is the first thing to run when a client cannot talk to a device. It checks:
 
-- Node.js >= 20
+- Node.js >= 22.12
 - the frida native binding loads
 - `adb` is on `PATH` and lists devices
 - Frida devices, and whether frida-server is reachable on each USB device, with hints when the frida-server version does not match the bundled frida-node

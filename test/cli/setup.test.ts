@@ -253,6 +253,14 @@ describe('runSetup', () => {
     expect(io.logs).toEqual(['claude mcp add --scope user -e "FRIDA_DEVICE_ID=my device" frida -- npx -y frida-mobile-mcp']);
   });
 
+  it('escapes shell metacharacters inside double-quoted arguments', () => {
+    const io = fakeIo({ which: () => null });
+    expect(runSetup({ client: 'claude-code', device: 'my "dev" \\ $HOME `id`' }, io)).toBe(0);
+    expect(io.logs.at(-1)).toBe(
+      'claude mcp add --scope user -e "FRIDA_DEVICE_ID=my \\"dev\\" \\\\ \\$HOME \\`id\\`" frida -- npx -y frida-mobile-mcp'
+    );
+  });
+
   it('runs claude when found and relays its output and exit code', () => {
     const io = fakeIo({
       which: () => '/usr/local/bin/claude',

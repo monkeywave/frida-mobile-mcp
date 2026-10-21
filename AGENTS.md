@@ -15,7 +15,7 @@ FRIDA_E2E=1 FRIDA_DEVICE_ID=emulator-5556 npx vitest run test/fritap/capture-tls
 node dist/index.js --help         # CLI smoke test (CI runs this)
 ```
 
-Node >= 20. CI (`.github/workflows/ci.yml`) runs build, lint, test, the CLI smoke test and `npm pack` content checks on Linux/macOS/Windows with Node 20/22/24.
+Node >= 22.12. CI (`.github/workflows/ci.yml`) runs build, lint, test, the CLI smoke test and `npm pack` content checks on Linux/macOS/Windows with Node 22/24.
 
 ## Frida 17 rules
 

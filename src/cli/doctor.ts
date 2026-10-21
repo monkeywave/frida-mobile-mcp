@@ -77,7 +77,8 @@ interface DoctorFrida {
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
-const MIN_NODE_MAJOR = 20;
+/** Oldest supported Node.js release (keep in step with `engines.node` in package.json). */
+const MIN_NODE_VERSION = '22.12';
 
 // ---------------------------------------------------------------------------
 // Default dependencies (real side effects live here only)
@@ -176,13 +177,25 @@ export function parseNodeMajor(version: string): number {
   return match ? Number(match[1]) : NaN;
 }
 
-export function checkNodeVersion(version: string, minMajor = MIN_NODE_MAJOR): CheckResult {
-  const major = parseNodeMajor(version);
-  const ok = Number.isFinite(major) && major >= minMajor;
+/** Parse `vMAJOR.MINOR.PATCH` (or a `MAJOR[.MINOR]` minimum) into `[major, minor]`; NaN when unparsable. */
+export function parseNodeMajorMinor(version: string): [number, number] {
+  const match = /^v?(\d+)(?:\.(\d+))?/.exec(version.trim());
+  return match ? [Number(match[1]), Number(match[2] ?? 0)] : [NaN, NaN];
+}
+
+function isAtLeast(version: string, minimum: string): boolean {
+  const [major, minor] = parseNodeMajorMinor(version);
+  const [minMajor, minMinor] = parseNodeMajorMinor(minimum);
+  if (!Number.isFinite(major)) return false;
+  return major > minMajor || (major === minMajor && minor >= minMinor);
+}
+
+export function checkNodeVersion(version: string, minimum = MIN_NODE_VERSION): CheckResult {
+  const ok = isAtLeast(version, minimum);
   return {
     name: 'Node.js version',
     status: ok ? 'ok' : 'fail',
-    detail: ok ? `${version} (>= ${minMajor} required)` : `${version} is too old, Node.js >= ${minMajor} is required`,
+    detail: ok ? `${version} (>= ${minimum} required)` : `${version} is too old, Node.js >= ${minimum} is required`,
     required: true,
   };
 }

@@ -181,6 +181,10 @@ describe('composeAgentSource: user scripts', () => {
     [`export default function main() {}`],
     [`export const x = 1;`],
     [`  export function f() {}`],
+    [`import X, { y } from 'z';`],
+    [`import * as m from 'z';`],
+    [`import type X from 'z';`],
+    [`import {\n  a,\n  b,\n} from 'z';`],
   ])('rejects ES module user source: %s', (src) => {
     expect(looksLikeEsModule(src)).toBe(true);
     expect(() => composeAgentSource({ kind: 'user', platform: 'android', name: 'user:esm', source: src })).toThrow(ScriptError);
@@ -193,6 +197,15 @@ describe('composeAgentSource: user scripts', () => {
     const src = `// this script does not import anything\nsend("export done");\nvar importantValue = 1;\n`;
     expect(looksLikeEsModule(src)).toBe(false);
     expect(() => composeAgentSource({ kind: 'user', platform: 'android', name: 'user:ok', source: src })).not.toThrow();
+  });
+
+  it.each([
+    ['tabs', 'import ' + '\t'.repeat(50_000)],
+    ['mixed whitespace', 'import ' + ' \t'.repeat(50_000)],
+  ])('classifies pathological %s input in linear time (ReDoS regression)', (_label, src) => {
+    const started = performance.now();
+    expect(looksLikeEsModule(src)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
   });
 });
 

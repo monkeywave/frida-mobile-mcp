@@ -1,6 +1,6 @@
 # frida-mobile-mcp
 
-> MCP server for dynamic analysis of Android and iOS apps with Frida 17. 40 tools (explore, hook, trace, execute/validate scripts, SSL pinning bypass, friTap TLS capture, memory, native analysis, device/process/session primitives, mobile-mcp UI gateway), 8 prebuilt scripts, shared `module+0xoffset` address notation and an evidence envelope on every result. npm package `frida-mobile-mcp`, Node >= 20, MIT.
+> MCP server for dynamic analysis of Android and iOS apps with Frida 17. 40 tools (explore, hook, trace, execute/validate scripts, SSL pinning bypass, friTap TLS capture, memory, native analysis, device/process/session primitives, mobile-mcp UI gateway), 8 prebuilt scripts, shared `module+0xoffset` address notation and an evidence envelope on every result. npm package `frida-mobile-mcp`, Node >= 22.12, MIT.
 
 ## Start here
 

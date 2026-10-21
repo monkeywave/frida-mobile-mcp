@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   checkNodeVersion,
+  parseNodeMajorMinor,
   classifyFridaError,
   doctorExitCode,
   formatDoctorTable,
@@ -34,7 +35,7 @@ function fakeFrida(devices: DoctorDevice[]): FridaModule {
 
 function fakeDeps(overrides: Partial<DoctorDeps> = {}): Partial<DoctorDeps> {
   return {
-    nodeVersion: 'v22.1.0',
+    nodeVersion: 'v22.12.0',
     platform: 'darwin',
     loadFrida: async () => fakeFrida([{ id: 'local', name: 'Local System', type: 'local' } as DoctorDevice, fakeUsbDevice()]),
     fridaNodeVersion: () => '17.24.3',
@@ -56,24 +57,38 @@ function findResult(results: CheckResult[], name: string): CheckResult {
 }
 
 describe('checkNodeVersion', () => {
-  it('accepts versions at or above the minimum major', () => {
-    expect(checkNodeVersion('v20.0.0').status).toBe('ok');
-    expect(checkNodeVersion('v22.11.0').status).toBe('ok');
+  it('accepts versions at or above the minimum major.minor', () => {
+    expect(checkNodeVersion('v22.12.0').status).toBe('ok');
+    expect(checkNodeVersion('v22.20.1').status).toBe('ok');
+    expect(checkNodeVersion('v24.0.0').status).toBe('ok');
   });
 
-  it('fails versions below the minimum major and is required', () => {
-    const result = checkNodeVersion('v18.19.0');
+  it('fails versions below the minimum and is required', () => {
+    const result = checkNodeVersion('v20.19.0');
     expect(result.status).toBe('fail');
     expect(result.required).toBe(true);
-    expect(result.detail).toContain('>= 20');
+    expect(result.detail).toContain('>= 22.12');
+  });
+
+  it('fails an older minor of the minimum major', () => {
+    expect(checkNodeVersion('v22.11.0').status).toBe('fail');
   });
 
   it('honours a custom minimum', () => {
-    expect(checkNodeVersion('v18.0.0', 18).status).toBe('ok');
+    expect(checkNodeVersion('v18.0.0', '18').status).toBe('ok');
+    expect(checkNodeVersion('v18.0.0', '18.1').status).toBe('fail');
   });
 
   it('fails on unparsable input', () => {
     expect(checkNodeVersion('garbage').status).toBe('fail');
+  });
+});
+
+describe('parseNodeMajorMinor', () => {
+  it('parses full versions and bare minimums', () => {
+    expect(parseNodeMajorMinor('v22.12.0')).toEqual([22, 12]);
+    expect(parseNodeMajorMinor('24')).toEqual([24, 0]);
+    expect(parseNodeMajorMinor('garbage')).toEqual([NaN, NaN]);
   });
 });
 

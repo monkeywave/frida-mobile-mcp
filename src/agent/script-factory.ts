@@ -89,7 +89,10 @@ export function isFridaCompileBundle(source: string): boolean {
   return source.startsWith(FRIDA_COMPILE_BUNDLE_MARKER);
 }
 
-const ESM_PATTERN = /^\s*(import\s+[\w{}*\s,]+\s+from\s+['"]|import\s*['"]|export\s+(default|const|function|class|let|var|\{))/m;
+// Linear-time: no two adjacent quantified groups can match the same characters (avoids ReDoS).
+// The optional second word covers `import type X from`.
+const ESM_PATTERN =
+  /^[ \t]*(?:import(?:[ \t]*['"{*]|[ \t]+[\w$]+(?:[ \t]+[\w$]+)?[ \t]*(?:,|from\b))|export[ \t]+(?:default|const|function|class|let|var|\{))/m;
 
 export function looksLikeEsModule(source: string): boolean {
   return ESM_PATTERN.test(source);

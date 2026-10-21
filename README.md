@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/frida-mobile-mcp.svg)](https://www.npmjs.com/package/frida-mobile-mcp)
 [![CI](https://github.com/monkeywave/frida-mobile-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/monkeywave/frida-mobile-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Node >=22.12](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen.svg)](package.json)
 
 An MCP server that gives AI agents dynamic instrumentation of Android and iOS apps through Frida 17. It exposes 40 tools: high-level ones that manage devices, sessions and scripts for you (explore an app, hook a Java/ObjC/native method, trace calls, bypass SSL pinning, capture TLS keys and plaintext with friTap, run prebuilt analysis scripts, validate custom scripts) and low-level primitives (spawn/attach, module and symbol enumeration, address resolution, control-flow analysis, memory dumps). Addresses use the same `module+0xoffset` notation as Ghidra/IDA so results move between static and dynamic tools without conversion, and every result carries an evidence envelope (`evidence_id`, `limitations`, `coverage`). Optional UI automation goes through [mobile-mcp](https://github.com/mobile-next/mobile-mcp).
 
@@ -39,7 +39,7 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 
 ## Requirements
 
-- Node.js >= 20 (CI runs 20, 22 and 24 on Linux, macOS and Windows). `npm install` runs the `frida` package's install script, which downloads the native frida-node prebuild.
+- Node.js >= 22.12 (CI runs 22 and 24 on Linux, macOS and Windows). `npm install` runs the `frida` package's install script, which downloads the native frida-node prebuild.
 - A device or emulator running **frida-server 17.x**. This package depends on frida-node `^17.24.3`; frida-server on the device must have the same major version (17) and ideally the same minor version. `frida-mobile-mcp doctor` prints both versions and flags mismatches.
 - Android: download the matching `frida-server-17.x.y-android-<arch>.xz` from <https://github.com/frida/frida/releases>, then
 

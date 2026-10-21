@@ -175,7 +175,7 @@ export function claudeCodeCommand(entry: ServerEntry, serverName = DEFAULT_SERVE
 }
 
 function shellJoin(args: string[]): string {
-  return args.map((arg) => (/\s/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg)).join(' ');
+  return args.map((arg) => (/\s/.test(arg) ? `"${arg.replace(/[\\"$`]/g, '\\$&')}"` : arg)).join(' ');
 }
 
 // ---------------------------------------------------------------------------

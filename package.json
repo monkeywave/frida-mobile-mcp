@@ -73,7 +73,7 @@
     "vitest": "^2.0.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "allowScripts": {
     "frida@17.24.3": true

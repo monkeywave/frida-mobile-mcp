@@ -6,6 +6,7 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError, FridaMcpError } from '../helpers/errors.js';
 import { validateProcessTarget } from '../helpers/sanitize.js';
+import { escapeRegExp } from '../helpers/regex.js';
 import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { responseFormatSchema } from '../constants.js';
@@ -55,7 +56,7 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
         const { id: sessionId, pid, platform } = sessionEntry;
         const spawned = needsResume;
 
-        const filter = class_filter || (platform === 'android' ? target.replace(/\./g, '\\.') : '.*');
+        const filter = class_filter || (platform === 'android' ? escapeRegExp(target) : '.*');
         let modules: ModuleInfo[] = [];
         let classes: string[] = [];
         try {

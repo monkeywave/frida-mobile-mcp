@@ -83,7 +83,7 @@ export function isAllowedOrigin(origin: string | undefined, allowed: readonly st
 
 /** Constant-time comparison of an `Authorization: Bearer ...` header with the expected token. */
 export function checkBearerToken(header: string | undefined, token: string): boolean {
-  const match = /^Bearer\s+(.+)$/i.exec(header?.trim() ?? '');
+  const match = /^Bearer\s+(\S.*)$/i.exec(header?.trim() ?? '');
   if (!match) return false;
   const presented = Buffer.from(match[1].trim());
   const expected = Buffer.from(token);

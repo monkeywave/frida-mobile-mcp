@@ -83,6 +83,19 @@ describe('http transport helpers', () => {
     expect(checkBearerToken(undefined, 'secret')).toBe(false);
   });
 
+  it('rejects blank bearer tokens and tolerates surrounding whitespace', () => {
+    expect(checkBearerToken('Bearer    ', 'secret')).toBe(false);
+    expect(checkBearerToken('Bearer   secret  ', 'secret')).toBe(true);
+  });
+
+  it('rejects pathological whitespace headers in linear time (ReDoS regression)', () => {
+    // A mid-header line break makes `$` fail, forcing the old /^Bearer\s+(.+)$/ to backtrack quadratically.
+    const header = 'Bearer ' + ' '.repeat(50_000) + '!\n!';
+    const started = performance.now();
+    expect(checkBearerToken(header, 'secret')).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
   it('refuses non-loopback binds without a token', () => {
     expect(() => assertHttpOptions({ host: '0.0.0.0' })).toThrow(/token/);
     expect(() => assertHttpOptions({ host: '0.0.0.0', token: 'x' })).not.toThrow();
