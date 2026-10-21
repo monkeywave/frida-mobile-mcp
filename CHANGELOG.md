@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.3...v0.3.0) (2026-10-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* Node.js 20 is no longer supported; Node.js >= 22.12 is required.
+
+### Features
+
+* Frida 17 support, native address interchange and static-tool analysis hand-off ([cf5bb38](https://github.com/monkeywave/frida-mobile-mcp/commit/cf5bb38df6d6deafb2d818c3c32ad729739cd274))
+* require Node.js &gt;= 22.12 ([d1a74f2](https://github.com/monkeywave/frida-mobile-mcp/commit/d1a74f20579ea21ee6afae43d4a9080c65320e63))
+
+
+### Bug Fixes
+
+* **ci:** make the ESM compiler project and path tests work on Windows ([2e76ef1](https://github.com/monkeywave/frida-mobile-mcp/commit/2e76ef1225be8bcacf6c22542013aeb8d5d2e8d8))
+* missing repo in package.json definition ([b2da55d](https://github.com/monkeywave/frida-mobile-mcp/commit/b2da55d6429438ed36e829e7478de42430cb4ef9))
+* publish workflow fix ([3c273f0](https://github.com/monkeywave/frida-mobile-mcp/commit/3c273f0b1ca00cf605266d5b1b6b81262e6d9c89))
+* publish workflow fix ([08cdee9](https://github.com/monkeywave/frida-mobile-mcp/commit/08cdee9f7ff663e5bdd946068b32044b83c93864))
+* **security:** resolve CodeQL ReDoS and incomplete-escaping alerts ([e31817b](https://github.com/monkeywave/frida-mobile-mcp/commit/e31817ba3c2c8ef33e244e3069f316b01f33ca69))
+
 ## [0.2.3](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.2...v0.2.3) (2026-04-03)
 
 
