@@ -97,6 +97,43 @@ Rules:
   `enumerate_modules` to obtain the base and subtract if a conversion is
   unavoidable.
 
+### 2.1 Hook by evidence
+
+`hook_method` and `hook_function` accept an `evidence` object in place of
+`method` / `target`, so a static finding becomes a hook without rewriting it
+by hand. Pass exactly one of `method`/`target` or `evidence`.
+
+| Evidence                                  | Becomes                         | Notes |
+|-------------------------------------------|---------------------------------|-------|
+| `{ module, offset }`                      | `module+0x<offset>`             | `offset` is image-base-relative (RVA): the address Ghidra/IDA show minus the image base. Hex string `"0x1234"`, decimal string or number. **Not** a raw on-disk file offset; there is no section translation. |
+| `{ module, address, image_base }`         | `module+0x<address-image_base>` | Copy the address exactly as the static tool shows it plus the base it used (Ghidra ELF default `0x100000`, IDA usually `0x0`). |
+| `{ class, signature }` (Java)             | `class.name(src types)`         | `hook_method` only. Hooks the **one** overload whose parameter types match. |
+| `{ class, method, signature }` (Java)     | same                            | For signatures without a name, e.g. `(byte[])`. Constructors: `$init` / `<init>`. |
+
+Java signatures are accepted in every common notation and normalised to the
+`Class#getName()` form Frida reports in `overload.argumentTypes[i].className`
+(`int`, `java.lang.String`, `[B`, `[Ljava.lang.String;`):
+
+| Source of the signature | Example |
+|-------------------------|---------|
+| jadx / `describe_class` (Java source form) | `encrypt(byte[], java.lang.String)` |
+| Frida / `Class#getName()` form             | `encrypt([B,java.lang.String)` |
+| Java declaration (modifiers, return type, parameter names, generics and annotations are dropped) | `public static byte[] encrypt(byte[] data, String key)` |
+| JVM descriptor (smali, Ghidra, JEB)        | `encrypt([BLjava/lang/String;)[B`, `([B)V` |
+
+The same signature may also be appended to a plain `hook_method` `method`:
+`com.example.Rc4Client.encrypt(byte[], java.lang.String)` hooks one overload,
+`com.example.Rc4Client.encrypt` keeps hooking all of them. Unqualified class
+names (`String`, `String[]`) match the runtime type by simple name; varargs
+`String...` is `String[]`; the return type is informational and not used for
+matching.
+
+When no overload matches, the hook is not installed: its liveness reports
+`reason: "OVERLOAD_MISMATCH"`, `class_resolved: true` and
+`availableOverloads` (the existing overloads in source form) so the
+signature can be corrected without guessing. A matched hook reports
+`overloads_matched: 1`.
+
 ## 3. Evidence and error envelope
 
 Every successful tool call returns the same envelope, both as text content

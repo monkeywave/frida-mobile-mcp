@@ -18,6 +18,8 @@ const ERROR_CLASSIFICATION: Record<string, { category: ErrorCategory; retryable:
   SCRIPT_NOT_FOUND: { category: 'request', retryable: false },
   HOOK_NOT_FOUND: { category: 'request', retryable: false },
   PROCESS_NOT_FOUND: { category: 'request', retryable: false },
+  // Same vocabulary as the hook liveness reason; retryable because the class may load later.
+  CLASS_NOT_LOADED: { category: 'request', retryable: true },
   CUSTOM_SCRIPTS_DISABLED: { category: 'authorization', retryable: false },
   MEMORY_WRITE_DISABLED: { category: 'authorization', retryable: false },
   DEVICE_NOT_ALLOWED: { category: 'authorization', retryable: false },

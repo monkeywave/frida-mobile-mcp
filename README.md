@@ -67,10 +67,11 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | Tool | Description |
 |------|-------------|
 | `get_status` | Connected devices, active sessions (platform, script count, last activity), hooks, traces and recent detaches/crashes. Run first and after a session is lost. |
-| `frida_help` | Topic help: overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, script_catalog. |
+| `frida_help` | Topic help: overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, script_catalog, script_api, recipes. |
 | `detect_app_technologies` | Fingerprint libraries, frameworks and security mechanisms; returns recommended script targets. |
 | `explore_app` | Spawn an app suspended, instrument, resume; returns pid, platform, modules and a filtered class list. |
 | `search_classes_and_methods` | Regex search over classes (and methods with `include_methods`) in a running app. |
+| `describe_class` | Full shape of one loaded class: every method overload with parameter/return types and a hook-ready `signature`, constructors, fields, superclass/interfaces (ObjC: selectors with type encodings). Feed a signature to `hook_method` `evidence: {class, signature}`. |
 | `discover_crypto` | Find where an app does crypto (or any API family) without assuming `javax.crypto`: ranked candidate hook targets across Java/ObjC classes and native symbols. |
 | `watch_loads` | Watch for late-loaded `.so` libraries and Java classes, plus anti-Frida probes; emits `watch_event` messages as the app runs. |
 | `trigger_and_wait` | Perform a UI action and block until the resulting hook/message output arrives, so you learn which hook a tap fired (or that none did). |
@@ -88,6 +89,11 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `stop_instrumentation` | Remove all hooks, scripts and traces on a target and detach. |
 | `unload_script` | Unload a single script (hook, trace or custom) from a session while keeping it attached. |
 | `mobile_action` | Gateway to mobile-mcp UI automation (screenshot, elements, tap, swipe, type, launch app, list apps). |
+| `search_recipes` | Search the purpose-indexed library of ready-to-run classic-JS recipes (custom crypto-key capture, native/JNI hooks, classloader/intent/WebView, iOS Keychain); returns ranked recipes with source to adapt and run via `execute_script`. |
+| `save_script` | Save a script under `~/.config/frida-mobile-mcp/scripts` for reuse. Requires `allowCustomScripts`. |
+| `list_saved_scripts` | List scripts saved with `save_script`. |
+| `run_saved_script` | Run a saved script by name against a target. Requires `allowCustomScripts`. |
+| `export_script` | Export a script as a standalone classic `.js` that runs under the plain `frida -U -f <pkg> -l file.js` CLI (preamble + source; bridges provided by the frida-tools CLI, not bundled). |
 
 ### Tier 2: advanced primitives
 

@@ -115,6 +115,17 @@ Example for the Android app `com.example.app`:
 
 Notes:
 
+- Before hooking a Java method, call `describe_class` for the exact method
+  overloads with parameter/return types and a hook-ready `signature`; pass that
+  string to `hook_method` as `evidence: { class, signature }` to instrument a
+  single overload (otherwise every overload is hooked). A static-analysis offset
+  becomes a hook via `hook_method` `evidence: { module, offset }`.
+- To author a custom script, follow the `write_frida_script` prompt and read
+  `frida_help({ topic: "script_api" })`. `search_recipes` returns ready-made
+  classic-JS snippets (custom crypto-key capture incl. hand-rolled RC4 like
+  `Rc4Client`, native/JNI hooks, classloader/intent/WebView, iOS Keychain) to
+  adapt and run with `execute_script`; keep useful ones with `save_script` /
+  `run_saved_script` and hand off a standalone CLI file with `export_script`.
 - `explore_app` accepts `class_filter` (regex); it defaults to the package
   pattern. `search_classes_and_methods` caps at `limit` (default 50).
 - Prebuilt scripts: `ssl_pinning_bypass`, `root_jailbreak_bypass`,

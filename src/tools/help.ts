@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { responseFormatSchema } from '../constants.js';
 
-const TOPIC_LIST = 'overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, script_catalog';
+const TOPIC_LIST = 'overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, script_catalog, script_api, recipes';
 
 const HELP_TOPICS: Record<string, string> = {
   overview: `# frida-mobile-mcp: Mobile Frida MCP Server
@@ -22,13 +22,14 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 7. \`capture_tls\` — TLS keys and plaintext via friTap (no pinning bypass needed)
 
 ## Tool Categories
-- **Exploration**: explore_app, detect_app_technologies, search_classes_and_methods, discover_crypto
+- **Exploration**: explore_app, detect_app_technologies, search_classes_and_methods, describe_class, discover_crypto
 - **Instrumentation**: hook_method, trace_method, execute_script, validate_script, run_prebuilt_script
 - **Observation**: watch_loads (late-loaded libs/classes + anti-Frida probes), trigger_and_wait (do a UI action, then wait for the hooks it fires)
 - **Security / TLS**: bypass_ssl_pinning, capture_tls
 - **Memory**: read_memory, write_memory, scan_memory
 - **Native analysis** (topic \`native\`): enumerate_modules, enumerate_exports, enumerate_imports, enumerate_symbols, resolve_address, analyze_native_function, dump_module_memory, list_threads
 - **Mobile UI**: mobile_action (tap, swipe, screenshot, elements via mobile-mcp)
+- **Knowledge & library**: search_recipes (purpose-indexed classic-JS recipes), save_script, list_saved_scripts, run_saved_script, export_script (standalone \`frida -U -l\` file) — see topics \`recipes\` and \`script_api\`
 - **Management**: get_status, get_messages, stop_instrumentation, unload_script, frida_help
 
 ## Finding the right hook target (crypto example)
@@ -285,6 +286,8 @@ get_messages({ session_id: "..." })
 \`\`\`
 explore_app({ target: "com.example.app" })
 search_classes_and_methods({ target: "com.example.app", pattern: "Payment", include_methods: true })
+describe_class({ session_id, class_name: "com.example.payment.PaymentClient" })  # exact overloads + signatures
+hook_method({ session_id, evidence: { class: "com.example.payment.PaymentClient", signature: "pay(java.lang.String, long)" } })
 trace_method({ target: "com.example.app", method: "com.example.payment.*", duration_seconds: 15 })
 # Trigger the payment flow in the app
 \`\`\`
@@ -368,6 +371,72 @@ These tools provide fine-grained control when the high-level tools don't fit you
 
 ## detect_app_technologies
 Run this first! It fingerprints 20+ libraries and recommends which scripts to use with optimal targets.`,
+
+  script_api: `# Writing Frida scripts for this server (the agent API)
+
+Scripts you run with \`execute_script\` (and every prebuilt template / recipe) run as a
+**classic Frida 17 agent** inside the target. Before your body runs, this server prepends a
+**preamble** (src/agent/preamble.ts) that gives you a small, stable API. Author new scripts
+against it.
+
+## \`__FRIDA_MCP__\`
+A global holding your call's context and options as a **JSON literal** (never spliced into
+code), so user input can't become code:
+- \`__FRIDA_MCP__.name\` — the script name
+- \`__FRIDA_MCP__.platform\` — "android" | "ios" | ...
+- \`__FRIDA_MCP__.options\` — the object you passed; read every parameter from here
+
+## Preamble helpers (classic JS, always present)
+- \`findExport(lib, name)\` — Frida 17 export lookup. \`lib\` null/'' → \`Module.findGlobalExportByName(name)\`; else \`Process.findModuleByName(lib).findExportByName(name)\`. Returns a NativePointer or null.
+- \`hookNative(lib, name, callbacks, options?)\` — resolve + \`Interceptor.attach\` with bookkeeping; the optional 4th arg carries Frida 17.10 options ({ scenario, relocation, scratchRegister, redirectSpaceHint }).
+- \`javaPerform(fn)\` — Promise-returning \`Java.perform\` (use in rpc.exports; frida awaits the promise). Rejects cleanly if the Java bridge is absent.
+- \`objcClassNames()\` — flattened \`ObjC.enumerateLoadedClassesSync()\`.
+- \`reportSummary(name?)\` — send the \`init_complete\` summary (hooks attempted/installed/skipped/errors).
+- \`recordHookError(target, e)\` — record an install error into the summary.
+- The \`Java\` / \`ObjC\` globals are always defined: a real bridge when injected, else \`{ available: false }\`, so \`if (Java.available)\` never throws a ReferenceError.
+
+## The send() convention
+Report results with \`send({ type: '...', ... })\`; read them back with \`get_messages\`. Agent
+\`console.log/warn/error\` is captured into the message buffer too (never to stdout). Throwns
+surface with full fidelity (stack/file/line/column).
+
+## Frida 17 instance API (the removed statics are rejected by validate_script)
+- \`Module.findExportByName(...)\`  → \`Process.getModuleByName(lib).findExportByName(name)\` or \`findExport(lib, name)\`
+- \`Module.findBaseAddress(...)\`   → \`Process.getModuleByName(lib).base\`
+- \`Module.enumerateExports/Imports/Symbols(...)\` → the same methods on a **Module instance**
+- \`Memory.readX()/writeX()\`       → \`NativePointer#readX()/writeX()\`
+- \`Process.enumerateXSync()\`      → \`Process.enumerateX()\` (returns an array)
+
+## Java / ObjC idioms & pitfalls
+- Resolve app classes across every class loader (plugin/split-dex/packed), not just the default one — \`describe_class\` and \`hook_method\` already do this; in a recipe, use the shared \`useInAnyLoader\` lookup.
+- Hook a **single overload** by argument types (\`overload('[B', 'java.lang.String')\`) — see \`describe_class\` for exact signatures and \`hook_method\`'s \`evidence: { class, signature }\`.
+- **10 s suspend limit:** Android kills a spawned process left suspended > ~10 s; resume before anything that waits on \`Java.perform\`.
+- **Lazy loading:** native \`.so\` and dynamic dex load late — if a class/export isn't there yet, use \`watch_loads\` then retry.
+
+See topic \`recipes\` for ready-made, adaptable examples, and \`validate_script\` to check a draft without a device.`,
+
+  recipes: `# Recipe library (purpose-indexed, classic JS)
+
+\`search_recipes\` returns ready-to-run classic-JS snippets you adapt and run with
+\`execute_script\`. Each recipe reads its parameters from \`__FRIDA_MCP__.options\` and reports
+via \`send({ type, ... })\` (see topic \`script_api\`). Browse them as the \`frida://recipes\`
+resource, or one at a time as \`frida://recipes/{name}\`.
+
+## What's in the library
+- **custom-java-crypto-key** — dump byte[]/String args + return of an app-defined crypto class (e.g. a hand-rolled RC4/AES helper that never touches javax.crypto). The rc4demo case.
+- **javax-crypto-key** — key/IV from the standard JCE (SecretKeySpec/IvParameterSpec/Cipher.init).
+- **native-export-hook** — attach to a native export by name and log its args.
+- **jni-register-natives** — reveal natives bound dynamically via JNI RegisterNatives.
+- **custom-classloader-enum** — list class loaders and the classes each exposes.
+- **intent-deeplink-trace** — log the Intents/deep links each Activity receives.
+- **webview-bridge** — report objects exposed to page JS via addJavascriptInterface.
+- **ios-keychain-trace** — log SecItem* Keychain access.
+
+## Save / run / export
+- \`save_script\` — store an adapted script under ~/.config/frida-mobile-mcp/scripts (needs allowCustomScripts).
+- \`list_saved_scripts\` — list what you've saved.
+- \`run_saved_script\` — run a saved script by name against a target.
+- \`export_script\` — emit a **standalone classic .js** that runs under the plain \`frida -U -f <pkg> -l file.js\` CLI (preamble + your source; bridges are provided by the frida-tools CLI, not bundled).`,
 };
 
 export function registerHelpTool(server: McpServer): void {

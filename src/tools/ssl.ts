@@ -3,6 +3,7 @@ import { toolOutputSchema } from '../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
+import { attachScriptSinks } from '../helpers/script-sink.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { resolveInstrumentationTarget } from './hook.js';
@@ -75,16 +76,11 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
           createdAt: Date.now(),
         });
 
-        script.message.connect((message, data) => {
-          if (message.type === 'send') {
-            results.push(message.payload);
-            state.addMessageToScript(sessionEntry!.id, scriptId, {
-              timestamp: Date.now(),
-              type: 'ssl_bypass',
-              payload: message.payload,
-              data: data ?? null,
-            });
-          }
+        attachScriptSinks(script, sessionEntry.id, scriptId, {
+          onSend: (payload, data) => {
+            results.push(payload as Record<string, unknown>);
+            state.addMessageToScript(sessionEntry!.id, scriptId, { timestamp: Date.now(), type: 'ssl_bypass', payload, data: data ?? null });
+          },
         });
 
         await script.load();

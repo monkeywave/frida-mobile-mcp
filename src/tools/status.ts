@@ -7,7 +7,7 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
 import { responseFormatSchema } from '../constants.js';
-import type { SessionEntry, DetachRecord } from '../types.js';
+import type { SessionEntry, DetachRecord, HookLiveness } from '../types.js';
 
 const RECENT_DETACH_LIMIT = 5;
 
@@ -33,6 +33,24 @@ export interface DetachSummary {
   reason: string;
   crash_summary: string | null;
   timestamp: string;
+}
+
+/**
+ * Hook liveness as get_status reports it. `fired:false` with `installed:true` is the
+ * silent-miss signal (hooked, but the code path never ran); `installed:false` with a
+ * `reason` means the target itself was wrong, and for OVERLOAD_MISMATCH
+ * `available_overloads` lists the signatures that do exist.
+ */
+export function summarizeHookLiveness(liveness: HookLiveness) {
+  return {
+    installed: liveness.installed,
+    fired: !!liveness.firstSeenTs,
+    ...(liveness.classResolved !== undefined ? { class_resolved: liveness.classResolved } : {}),
+    ...(liveness.overloadsMatched !== undefined ? { overloads_matched: liveness.overloadsMatched } : {}),
+    ...(liveness.matches !== undefined ? { matches: liveness.matches } : {}),
+    ...(liveness.reason ? { reason: liveness.reason } : {}),
+    ...(liveness.availableOverloads ? { available_overloads: liveness.availableOverloads } : {}),
+  };
 }
 
 /** Pure projection of a session for get_status; `now` is injectable for tests. */
@@ -126,18 +144,7 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
           // Liveness: did it actually attach, and has it ever fired? `fired:false` with
           // `installed:true` is the silent-miss signal (hooked, but the code path never ran);
           // `installed:false` with a `reason` means the target itself was wrong.
-          ...(h.liveness
-            ? {
-                liveness: {
-                  installed: h.liveness.installed,
-                  fired: !!h.liveness.firstSeenTs,
-                  ...(h.liveness.classResolved !== undefined ? { class_resolved: h.liveness.classResolved } : {}),
-                  ...(h.liveness.overloadsMatched !== undefined ? { overloads_matched: h.liveness.overloadsMatched } : {}),
-                  ...(h.liveness.matches !== undefined ? { matches: h.liveness.matches } : {}),
-                  ...(h.liveness.reason ? { reason: h.liveness.reason } : {}),
-                },
-              }
-            : {}),
+          ...(h.liveness ? { liveness: summarizeHookLiveness(h.liveness) } : {}),
         }));
 
         // Traces

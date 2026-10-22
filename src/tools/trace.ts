@@ -3,6 +3,7 @@ import { toolOutputSchema } from '../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
+import { attachScriptSinks } from '../helpers/script-sink.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { log, audit } from '../helpers/logger.js';
@@ -95,18 +96,14 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
         };
         sessionEntry.scripts.set(scriptId, scriptEntry);
 
-        script.message.connect((message, data) => {
-          if (message.type === 'send' && message.payload) {
+        attachScriptSinks(script, sessionEntry.id, scriptId, {
+          onSend: (payload, data) => {
+            if (!payload) return;
             if (invocations.length < 1000) {
-              invocations.push(message.payload);
+              invocations.push(payload as Record<string, unknown>);
             }
-            state.addMessageToScript(sessionEntry!.id, scriptId, {
-              timestamp: Date.now(),
-              type: 'trace_hit',
-              payload: message.payload,
-              data: data ?? null,
-            });
-          }
+            state.addMessageToScript(sessionEntry!.id, scriptId, { timestamp: Date.now(), type: 'trace_hit', payload, data: data ?? null });
+          },
         });
 
         await script.load();

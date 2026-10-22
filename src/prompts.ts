@@ -187,4 +187,55 @@ Produce:
       }],
     })
   );
+
+  server.registerPrompt(
+    'write_frida_script',
+    {
+      description: 'Author, validate and save/export a working Frida script for a concrete goal (e.g. "log the RC4 key"), using the discovery → hook → drive → verify → deliver loop.',
+      argsSchema: z.object({
+        package_name: z.string().describe('App bundle ID (e.g., com.example.rc4demo)'),
+        goal: z.string().describe('What the script must achieve in one line (e.g., "log the RC4 key in com.example.rc4demo")'),
+        platform: z.string().optional().describe('android or ios'),
+      }),
+    },
+    async ({ package_name, goal, platform }) => ({
+      messages: [{
+        role: 'user' as const,
+        content: {
+          type: 'text' as const,
+          text: `You are writing a Frida script for ${package_name}${platform ? ` on ${platform}` : ''}.
+
+Goal: ${goal}
+
+Work this loop with the server's tools; do not hand-write a script before you know the exact target.
+
+## Phase 0: LEARN THE AGENT API
+1. \`frida_help({ topic: "script_api" })\` — the preamble helpers (findExport, hookNative, javaPerform), \`__FRIDA_MCP__.options\`, the send() convention, and Frida 17 instance-API equivalents.
+2. \`frida_help({ topic: "recipes" })\` then \`search_recipes({ query: "<keywords from the goal>" })\` — start from the closest recipe instead of a blank file.
+
+## Phase 1: RECON — find the real target (don't assume javax.crypto)
+3. \`explore_app({ target: "${package_name}" })\`, then wait ~3 s (or \`watch_loads\`) for app classes/.so to load.
+4. For a crypto goal: \`discover_crypto({ target: "${package_name}" })\` — it finds custom Java (e.g. \`Rc4Client\`) and native symbols, not just the JCE. Otherwise \`search_classes_and_methods\`.
+5. \`describe_class({ session_id, class_name: "<candidate>" })\` — get exact method overloads and signatures.
+
+## Phase 2: DRAFT from a recipe
+6. Adapt the closest recipe's source to the class/method/signature you found. Read every parameter from \`__FRIDA_MCP__.options\`; never splice values into code. Keep it classic JS (no import/export) unless you deliberately need an ESM bundle.
+7. \`validate_script({ source })\` — catch syntax and Frida-17 removed-API errors before touching the device.
+
+## Phase 3: RUN & VERIFY the feedback loop
+8. \`execute_script({ target: "${package_name}", source, persistent: true })\` (needs allowCustomScripts), or hook directly with \`hook_method({ evidence: { class, signature } })\` for a single overload.
+9. \`trigger_and_wait\` — drive the app (launch/tap) and wait for the hook to fire.
+10. \`get_status\` — check hook **liveness**: \`installed\`, \`fired\`, \`class_resolved\`, \`overloads_matched\`. If it installed but never fired, you hooked the wrong method/overload — go back to describe_class. If \`class_resolved\` is false, the class loads later — \`watch_loads\` then retry.
+11. If the Java path yields nothing, fall back to the native implementation: \`discover_crypto\` native symbols → \`hook_method\` with \`evidence: { module, offset }\` from a static tool, or the native-export-hook / jni-register-natives recipes.
+
+## Phase 4: DELIVER
+12. When the script reliably produces the goal output, \`save_script({ name, source, description })\` to keep it.
+13. \`export_script({ name, package: "${package_name}" })\` for a standalone file that runs under \`frida -U -f ${package_name} -l file.js\`. Note the exported file relies on the frida-tools CLI to inject the Java/ObjC bridge; a classic body that needs the bridge only works under a CLI that provides it.
+14. \`stop_instrumentation\` when done.
+
+Report the final script, how you verified it fired (liveness + a sample message), and the saved/exported path.`,
+        },
+      }],
+    })
+  );
 }

@@ -12,8 +12,24 @@ import {
   interceptorOptionsSchema,
   normalizeInterceptorOptions,
   INTERCEPTOR_TARGET_SNIPPET,
+  hookEvidenceSchema,
+  resolveHookMethod,
+  type HookEvidence,
   type InterceptorOptions,
 } from '../hook.js';
+
+/**
+ * The hook_function target: `target` as given, or `module+0xoff` from native static
+ * evidence. Java evidence is rejected here (hook_function is Interceptor-only).
+ */
+export function resolveHookFunctionTarget(target: string | undefined, evidence: HookEvidence | undefined): string {
+  if (evidence && (evidence.class !== undefined || evidence.signature !== undefined || evidence.method !== undefined)) {
+    throw new FridaMcpError('INVALID_ARGUMENT', 'hook_function only takes native evidence ({module, offset} or {module, address, image_base}); use hook_method for Java {class, signature}.', [
+      { tool: 'hook_method', reason: 'Hook a Java overload by signature' },
+    ], { evidence });
+  }
+  return resolveHookMethod(target, evidence);
+}
 
 function isObjCSelector(target: string): boolean {
   return target.startsWith('-[') || target.startsWith('+[');
@@ -107,10 +123,13 @@ export function registerAdvancedInterceptTools(server: McpServer): void {
     'hook_function',
     {
       title: 'Hook Function (Low-Level)',
-      description: 'Low-level hook with custom onEnter/onLeave JavaScript handlers. For advanced use when hook_method does not provide enough control. Custom handler bodies require allowCustomScripts: true in config; without them the hook sends default enter/leave events. Handler bodies are compiled as functions (new Function) inside the agent: `this` is the Interceptor invocation context (this.context, this.returnAddress, this.threadId, and any fields you set in on_enter are visible in on_leave). Java/ObjC globals are available (auto-injected by platform).',
+      description: 'Low-level hook with custom onEnter/onLeave JavaScript handlers. For advanced use when hook_method does not provide enough control. Custom handler bodies require allowCustomScripts: true in config; without them the hook sends default enter/leave events. Handler bodies are compiled as functions (new Function) inside the agent: `this` is the Interceptor invocation context (this.context, this.returnAddress, this.threadId, and any fields you set in on_enter are visible in on_leave). Java/ObjC globals are available (auto-injected by platform). A static-analysis finding can be passed as evidence {module, offset} or {module, address, image_base} instead of target.',
       inputSchema: z.object({
         session_id: z.string().describe('Session ID'),
-        target: z.string().describe('Function target: "module!func" (module export), "module+0x1234" or "module+4660" (module-relative offset, as shown by Ghidra/IDA), "0x7f12345678" (absolute address), "func" or "!func" (global export searched across all modules), or an ObjC selector "-[Class method:]"'),
+        target: z.string().optional().describe('Required unless evidence is given. Function target: "module!func" (module export), "module+0x1234" or "module+4660" (module-relative offset, as shown by Ghidra/IDA), "0x7f12345678" (absolute address), "func" or "!func" (global export searched across all modules), or an ObjC selector "-[Class method:]"'),
+        evidence: hookEvidenceSchema
+          .optional()
+          .describe('Native static-analysis evidence instead of target: {module, offset} (offset relative to the image base, as Ghidra/IDA show it minus the base) or {module, address, image_base}. Resolved to "module+0xoff".'),
         on_enter: z.string().optional().describe('JavaScript function body for onEnter. Receives `args` (NativePointer[]); `this` is the invocation context. Requires allowCustomScripts.'),
         on_leave: z.string().optional().describe('JavaScript function body for onLeave. Receives `retval` (InvocationReturnValue); `this` is the invocation context. Requires allowCustomScripts.'),
         interceptor_options: interceptorOptionsSchema,
@@ -124,9 +143,10 @@ export function registerAdvancedInterceptTools(server: McpServer): void {
         openWorldHint: true,
       },
     },
-    async ({ session_id, target, on_enter, on_leave, interceptor_options, response_format }) => {
+    async ({ session_id, target: targetInput, evidence, on_enter, on_leave, interceptor_options, response_format }) => {
       try {
         const state = getState();
+        const target = resolveHookFunctionTarget(targetInput, evidence);
         const session = state.getSession(session_id);
         if (!session) throw new FridaMcpError('SESSION_NOT_FOUND', `Session not found.`, []);
 
@@ -180,6 +200,7 @@ export function registerAdvancedInterceptTools(server: McpServer): void {
           hook_id: hookId,
           script_id: scriptId,
           target,
+          ...(evidence ? { evidence } : {}),
           status: 'active',
           interceptor_options: hookOptions.interceptorOptions ?? null,
         }, [

@@ -7,6 +7,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from './device/manager.js';
 import { getState } from './state.js';
 import { getScriptRegistry } from './scripts/registry.js';
+import { listRecipes, getRecipe } from './recipes/registry.js';
 
 const cache = new Map<string, { data: unknown; expiresAt: number }>();
 
@@ -227,6 +228,68 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
             name: template.name, description: template.description,
             platforms: template.platforms, category: template.category,
             riskTier: template.riskTier, options: template.options,
+          }),
+        }],
+      };
+    }
+  );
+
+  // Template: frida://scripts/{name}/source — the generated classic-JS body of a template,
+  // as a worked example the AI can read and adapt. Generated with default options.
+  server.registerResource(
+    'frida-script-source',
+    new ResourceTemplate('frida://scripts/{name}/source', { list: undefined }),
+    { description: 'Generated classic-JS source of a pre-built script (worked example), with its options', mimeType: 'text/plain' },
+    async (uri, variables) => {
+      const registry = getScriptRegistry();
+      const template = registry.get(String(variables.name));
+      if (!template) {
+        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ error: 'Script not found' }) }] };
+      }
+      const header = [
+        `// Prebuilt script: ${template.name}`,
+        `// ${template.description}`,
+        `// Platforms: ${template.platforms.join(', ')} | category: ${template.category} | riskTier: ${template.riskTier}`,
+        template.options ? `// Options: ${JSON.stringify(template.options)}` : '// Options: none',
+        '// Runs after the agent preamble (findExport/hookNative/javaPerform/objcClassNames/reportSummary);',
+        '// reads its options from __FRIDA_MCP__.options. Run via run_prebuilt_script, or adapt and run with execute_script.',
+        '',
+      ].join('\n');
+      return { contents: [{ uri: uri.href, mimeType: 'text/plain', text: header + template.generate({}) }] };
+    }
+  );
+
+  // Static: frida://recipes — purpose-indexed library catalog.
+  server.registerResource(
+    'frida-recipes-catalog',
+    'frida://recipes',
+    { description: 'Purpose-indexed library of classic-JS Frida recipes (custom crypto-key capture, native/JNI hooks, classloader/intent/WebView, iOS Keychain)', mimeType: 'application/json' },
+    async (uri) => {
+      const recipes = listRecipes().map((r) => ({
+        name: r.name, title: r.title, purpose: r.purpose,
+        platforms: r.platforms, tags: r.tags,
+      }));
+      return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(recipes) }] };
+    }
+  );
+
+  // Template: frida://recipes/{name} — one recipe with its classic-JS source and usage.
+  server.registerResource(
+    'frida-recipe-detail',
+    new ResourceTemplate('frida://recipes/{name}', { list: undefined }),
+    { description: 'A single recipe: classic-JS source, options and usage guidance', mimeType: 'application/json' },
+    async (uri, variables) => {
+      const recipe = getRecipe(String(variables.name));
+      if (!recipe) {
+        return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ error: 'Recipe not found' }) }] };
+      }
+      return {
+        contents: [{
+          uri: uri.href, mimeType: 'application/json',
+          text: JSON.stringify({
+            name: recipe.name, title: recipe.title, purpose: recipe.purpose,
+            platforms: recipe.platforms, tags: recipe.tags, options: recipe.options,
+            usage: recipe.usage, source: recipe.source,
           }),
         }],
       };

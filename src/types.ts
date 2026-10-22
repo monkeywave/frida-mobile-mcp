@@ -86,6 +86,7 @@ export interface HookLiveness {
   installed: boolean;           // did the agent attach the interceptor / implementation
   classResolved?: boolean;      // java/objc: was the target class found (in any loader)
   overloadsMatched?: number;    // java: how many method overloads were instrumented
+  availableOverloads?: string[]; // java OVERLOAD_MISMATCH: signatures of the overloads that exist
   matches?: number;             // objc: how many classes/selectors matched
   firstSeenTs?: number | null;  // when the hook first fired; null = installed but never hit
   reason?: HookMissReason;      // populated when installed === false

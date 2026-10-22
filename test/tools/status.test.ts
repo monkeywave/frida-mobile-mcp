@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getScriptRegistry } from '../../src/scripts/registry.js';
-import { summarizeSession, summarizeRecentDetaches } from '../../src/tools/status.js';
+import { summarizeSession, summarizeRecentDetaches, summarizeHookLiveness } from '../../src/tools/status.js';
 import type { SessionEntry, DetachRecord } from '../../src/types.js';
 
 // Test the structural aspects we can verify without mocking Frida
@@ -111,5 +111,18 @@ describe('summarizeRecentDetaches', () => {
     expect(plain.session_id).toBe('sess-0');
     expect(plain.crash_summary).toBeNull();
     expect(plain.timestamp).toBe(new Date(T0).toISOString());
+  });
+});
+
+describe('summarizeHookLiveness', () => {
+  it('reports a never-fired installed hook with its overload count', () => {
+    expect(summarizeHookLiveness({ installed: true, classResolved: true, overloadsMatched: 1, firstSeenTs: null }))
+      .toEqual({ installed: true, fired: false, class_resolved: true, overloads_matched: 1 });
+  });
+
+  it('surfaces available_overloads next to the OVERLOAD_MISMATCH reason', () => {
+    expect(summarizeHookLiveness({
+      installed: false, classResolved: true, reason: 'OVERLOAD_MISMATCH', availableOverloads: ['f(byte[])'], firstSeenTs: null,
+    })).toEqual({ installed: false, fired: false, class_resolved: true, reason: 'OVERLOAD_MISMATCH', available_overloads: ['f(byte[])'] });
   });
 });

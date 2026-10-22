@@ -98,6 +98,10 @@
       "description": "Search for classes and their methods by pattern in a running app"
     },
     {
+      "name": "describe_class",
+      "description": "Return the full shape of one loaded class: method overloads with exact parameter/return types and hook-ready signatures, constructors, fields, superclass and interfaces (ObjC: selectors with type encodings)"
+    },
+    {
       "name": "discover_crypto",
       "description": "Find where an app performs cryptography (or any API family) without assuming javax.crypto: ranked candidate hook targets across Java/ObjC classes and native symbols"
     },
@@ -240,6 +244,26 @@
     {
       "name": "list_threads",
       "description": "List the threads of the target process (id, name, state, current pc as module+0xoffset)"
+    },
+    {
+      "name": "search_recipes",
+      "description": "Search the purpose-indexed library of ready-to-run classic-JS Frida recipes (custom crypto-key capture, native/JNI hooks, classloader/intent/WebView, iOS Keychain); returns ranked recipes with source to adapt and run via execute_script"
+    },
+    {
+      "name": "save_script",
+      "description": "Save a Frida script under ~/.config/frida-mobile-mcp/scripts for reuse (requires allowCustomScripts)"
+    },
+    {
+      "name": "list_saved_scripts",
+      "description": "List Frida scripts previously saved with save_script"
+    },
+    {
+      "name": "run_saved_script",
+      "description": "Run a previously saved Frida script by name against a target (requires allowCustomScripts)"
+    },
+    {
+      "name": "export_script",
+      "description": "Export a Frida script as a standalone classic .js that runs under the plain 'frida -U -f <pkg> -l file.js' CLI (preamble + source; bridges provided by the frida-tools CLI, not bundled)"
     }
   ],
   "compatibility": {

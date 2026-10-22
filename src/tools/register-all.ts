@@ -12,6 +12,7 @@ import { registerTraceTool } from './trace.js';
 import { registerScriptTool } from './script.js';
 import { registerPrebuiltTool } from './prebuilt.js';
 import { registerSearchTool } from './search.js';
+import { registerDescribeClassTool } from './describe-class.js';
 import { registerDiscoverTool } from './discover.js';
 import { registerWatchTool } from './watch.js';
 import { registerTriggerTool } from './trigger.js';
@@ -22,6 +23,8 @@ import { registerCleanupTool } from './cleanup.js';
 import { registerMobileTool } from './mobile.js';
 import { registerDetectTool } from './detect.js';
 import { registerValidateTool } from './validate.js';
+import { registerRecipesTool } from './recipes.js';
+import { registerLibraryTools } from './library.js';
 import { registerFritapTool } from '../fritap/tool.js';
 import { registerAdvancedDeviceTools } from './advanced/device.js';
 import { registerAdvancedProcessTools } from './advanced/process.js';
@@ -49,6 +52,7 @@ export function registerTier1Tools(server: McpServer, deviceManager: DeviceManag
   registerScriptTool(server, deviceManager);
   registerPrebuiltTool(server, deviceManager);
   registerSearchTool(server, deviceManager);
+  registerDescribeClassTool(server, deviceManager);
   registerDiscoverTool(server, deviceManager);
   registerWatchTool(server, deviceManager);
   registerMemoryTools(server);
@@ -60,6 +64,8 @@ export function registerTier1Tools(server: McpServer, deviceManager: DeviceManag
   registerTriggerTool(server);
   registerDetectTool(server, deviceManager);
   registerValidateTool(server);
+  registerRecipesTool(server);
+  registerLibraryTools(server, deviceManager);
 }
 
 /** Tier 2: advanced primitives (devices, processes, sessions, modules, native analysis). */

@@ -119,6 +119,57 @@ describe('hook_method MCP tool handler', () => {
     expect(createAgentScript).not.toHaveBeenCalled();
   });
 
+  it('hooks one Java overload from {class, signature} evidence', async () => {
+    const parsed = await callJson(client, 'hook_method', {
+      target: 'com.example.app',
+      evidence: { class: 'com.example.Rc4Client', signature: 'encrypt([BLjava/lang/String;)[B' },
+    });
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.result.hook_type).toBe('java');
+    expect(parsed.result.method).toBe('com.example.Rc4Client.encrypt(byte[], java.lang.String)');
+    expect(parsed.result.arg_types).toEqual(['[B', 'java.lang.String']);
+    expect(parsed.result.evidence).toEqual({ class: 'com.example.Rc4Client', signature: 'encrypt([BLjava/lang/String;)[B' });
+    expect(createAgentScript.mock.calls[0][1].options).toMatchObject({
+      className: 'com.example.Rc4Client',
+      methodName: 'encrypt',
+      argTypes: ['[B', 'java.lang.String'],
+    });
+  });
+
+  it('hooks a native module+offset from {module, address, image_base} evidence', async () => {
+    const parsed = await callJson(client, 'hook_method', {
+      target: 'com.example.app',
+      evidence: { module: 'librc4.so', address: '0x101234', image_base: '0x100000' },
+    });
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.result.hook_type).toBe('native');
+    expect(parsed.result.method).toBe('librc4.so+0x1234');
+    expect(createAgentScript.mock.calls[0][1].options.nativeTarget).toEqual({ kind: 'offset', module: 'librc4.so', offset: '0x1234' });
+  });
+
+  it('rejects method together with evidence, and neither of them', async () => {
+    const both = await callJson(client, 'hook_method', { target: 'com.example.app', method: 'a.B.c', evidence: { class: 'a.B', method: 'c' } });
+    expect(both.error.code).toBe('INVALID_ARGUMENT');
+    const neither = await callJson(client, 'hook_method', { target: 'com.example.app' });
+    expect(neither.error.code).toBe('INVALID_ARGUMENT');
+    expect(createAgentScript).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an OVERLOAD_MISMATCH reported while the script loads', async () => {
+    script.load.mockImplementation(async () => {
+      const handler = script.message.connect.mock.calls[0][0];
+      handler({ type: 'send', payload: { status: 'hook_error', reason: 'OVERLOAD_MISMATCH', classResolved: true, availableOverloads: ['bar(byte[])'] } }, null);
+    });
+
+    const parsed = await callJson(client, 'hook_method', { target: 'com.example.app', method: 'com.example.Foo.bar(int)' });
+
+    expect(parsed.result.status).toBe('error');
+    expect(parsed.result.liveness).toMatchObject({ installed: false, reason: 'OVERLOAD_MISMATCH', availableOverloads: ['bar(byte[])'] });
+    expect(parsed.result.message).toMatch(/OVERLOAD_MISMATCH/);
+  });
+
   it('wraps a device resolution failure as DEVICE_NOT_FOUND', async () => {
     deviceManager.resolve.mockRejectedValue(new Error('unable to find device'));
 

@@ -20,6 +20,7 @@ import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession, withTimeout } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript } from '../agent/script-factory.js';
+import { attachScriptLogHandler } from '../helpers/script-sink.js';
 import type { SessionEntry } from '../types.js';
 import {
   configureFritapAgent,
@@ -146,6 +147,9 @@ async function runCaptureTls(deviceManager: DeviceManager, args: CaptureTlsArgs)
       spawned: needsResume,
     });
     connectMessageSink(sessionEntry, scriptId, script, capture, initial);
+    // Keep agent console.* out of stdout (the stdio JSON-RPC channel); the bespoke
+    // capture/handshake message protocol above stays as-is.
+    attachScriptLogHandler(script, sessionEntry.id, scriptId);
     await script.load();
     log('info', `friTap agent ${agent.version} loaded (handshake: ${handshake.answered.join(',') || 'none'})`);
   } catch (err) {

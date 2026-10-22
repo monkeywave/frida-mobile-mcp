@@ -117,6 +117,30 @@ describe('hook_function / unhook_function MCP tool handlers', () => {
 
       expect(parsed.result.interceptor_options).toEqual({ scenario: 'offline' });
     });
+    it('resolves native {module, offset} evidence to module+0xoff', async () => {
+      seedSession(getState(), []);
+
+      const parsed = await callJson(client, 'hook_function', {
+        session_id: DEFAULT_SESSION_ID,
+        evidence: { module: 'librc4.so', offset: 4660 },
+      });
+
+      expect(parsed.error).toBeUndefined();
+      expect(parsed.result.target).toBe('librc4.so+0x1234');
+      expect(parsed.result.evidence).toEqual({ module: 'librc4.so', offset: 4660 });
+      const options = createAgentScript.mock.calls[0][1].options as Json;
+      expect(options.nativeTarget).toEqual({ kind: 'offset', module: 'librc4.so', offset: '0x1234' });
+    });
+
+    it('rejects Java evidence and a call with neither target nor evidence', async () => {
+      seedSession(getState(), []);
+
+      const java = await callJson(client, 'hook_function', { session_id: DEFAULT_SESSION_ID, evidence: { class: 'a.B', signature: 'f()' } });
+      expect(java.error.code).toBe('INVALID_ARGUMENT');
+      const neither = await callJson(client, 'hook_function', { session_id: DEFAULT_SESSION_ID });
+      expect(neither.error.code).toBe('INVALID_ARGUMENT');
+      expect(createAgentScript).not.toHaveBeenCalled();
+    });
   });
 
   describe('unhook_function', () => {

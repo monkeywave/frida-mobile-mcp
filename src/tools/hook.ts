@@ -11,7 +11,9 @@ import { getOrCreateSession } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript } from '../agent/script-factory.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
-import { parseTarget, RESOLVE_TARGET_SNIPPET } from '../agent/address.js';
+import { formatModuleOffset, parseTarget, RESOLVE_TARGET_SNIPPET } from '../agent/address.js';
+import { JAVA_CLASS_LOOKUP_SNIPPET } from '../agent/java-class-lookup.js';
+import { formatJavaSignature, parseJavaSignature } from '../agent/java-signature.js';
 import type { HookEntry, HookMissReason } from '../types.js';
 
 /**
@@ -84,6 +86,113 @@ export function interceptorOptionsLimitations(hookType: 'native' | 'java' | 'obj
   return [`interceptor_options only apply to native Interceptor hooks and were ignored for this ${hookType} hook.`];
 }
 
+const unsignedNumberSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
+
+/**
+ * Static-analysis evidence (Ghidra / IDA / jadx / JEB) that names a hook target without
+ * rewriting it into hook notation. Flat object (not a union) so every MCP client can
+ * render it; the field combination decides the kind:
+ *   native  { module, offset }                 offset = image-base-relative RVA
+ *           { module, address, image_base }    static address + the image base the tool used
+ *   java    { class, signature }               signature may carry the method name
+ *           { class, method, signature }       or the name is given separately
+ */
+export const hookEvidenceSchema = z
+  .object({
+    module: z.string().min(1).optional().describe('Native: module (library) name as loaded in the process, e.g. "libfoo.so".'),
+    offset: unsignedNumberSchema
+      .optional()
+      .describe('Native: offset of the function relative to the module image base (RVA), hex "0x1234" or decimal. This is the address Ghidra/IDA show minus the image base; it is NOT a raw on-disk file offset.'),
+    address: unsignedNumberSchema
+      .optional()
+      .describe('Native: function address exactly as shown by the static tool (e.g. Ghidra "0x101234"); requires image_base.'),
+    image_base: unsignedNumberSchema
+      .optional()
+      .describe('Native: image base the static tool used for "address" (Ghidra ELF default 0x100000, IDA usually 0x0). offset = address - image_base.'),
+    class: z.string().min(1).optional().describe('Java: fully qualified class name, e.g. "com.example.Rc4Client".'),
+    method: z.string().min(1).optional().describe('Java: method name; optional when the signature carries it. Constructors: "$init" or "<init>".'),
+    signature: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Java: signature selecting ONE overload, in any common form: "encrypt(byte[], java.lang.String)" (jadx / describe_class), "encrypt([B,java.lang.String)", "byte[] encrypt(byte[] data, String key)", or a JVM descriptor "encrypt([BLjava/lang/String;)[B". Unqualified class names ("String") match by simple name.'),
+  })
+  .strict()
+  .describe('Static-analysis evidence instead of a method spec. Native: {module, offset} or {module, address, image_base}. Java: {class, signature} (hooks only the matching overload).');
+
+export type HookEvidence = z.infer<typeof hookEvidenceSchema>;
+
+function invalidEvidence(message: string, evidence: HookEvidence): FridaMcpError {
+  return new FridaMcpError('INVALID_ARGUMENT', message, [{ tool: 'frida_help', reason: 'See the evidence / address notation' }], { evidence });
+}
+
+function parseUnsigned(value: string | number, field: string, evidence: HookEvidence): bigint {
+  const text = String(value).trim();
+  if (!/^(0[xX][0-9a-fA-F]+|\d+)$/.test(text)) {
+    throw invalidEvidence(`evidence.${field} must be a non-negative hex ("0x1234") or decimal number, got "${text}".`, evidence);
+  }
+  return BigInt(text);
+}
+
+/** `{ module, offset }` / `{ module, address, image_base }` -> `module+0xoff`. */
+export function nativeEvidenceToTarget(evidence: HookEvidence): string {
+  const { module, offset, address, image_base: imageBase } = evidence;
+  if (!module) throw invalidEvidence('Native evidence needs "module".', evidence);
+  if (offset !== undefined && (address !== undefined || imageBase !== undefined)) {
+    throw invalidEvidence('Pass either evidence.offset or evidence.address + evidence.image_base, not both.', evidence);
+  }
+  if (offset !== undefined) return formatModuleOffset(module, parseUnsigned(offset, 'offset', evidence));
+  if (address === undefined || imageBase === undefined) {
+    throw invalidEvidence('Native evidence needs "offset" (image-base-relative) or both "address" and "image_base".', evidence);
+  }
+  const rva = parseUnsigned(address, 'address', evidence) - parseUnsigned(imageBase, 'image_base', evidence);
+  if (rva < 0n) throw invalidEvidence('evidence.address is below evidence.image_base.', evidence);
+  return formatModuleOffset(module, rva);
+}
+
+/** `{ class, signature }` -> `com.pkg.Class.name(type, type)` (canonical source form). */
+export function javaEvidenceToMethod(evidence: HookEvidence): string {
+  const { class: className, method, signature } = evidence;
+  if (!className) throw invalidEvidence('Java evidence needs "class".', evidence);
+  const methodName = method?.replace(/^<init>$/, '$init');
+  if (!signature) {
+    if (!methodName) throw invalidEvidence('Java evidence needs "signature" (or at least "method").', evidence);
+    return `${className}.${methodName}`;
+  }
+  let parsed;
+  try {
+    parsed = parseJavaSignature(signature);
+  } catch (err) {
+    throw invalidEvidence((err as Error).message, evidence);
+  }
+  if (parsed.name && methodName && parsed.name !== methodName) {
+    throw invalidEvidence(`evidence.method "${methodName}" does not match the name in evidence.signature "${parsed.name}".`, evidence);
+  }
+  const name = parsed.name ?? methodName;
+  if (!name) throw invalidEvidence('The signature has no method name; add evidence.method.', evidence);
+  return `${className}.${formatJavaSignature(name, parsed.argTypes)}`;
+}
+
+/**
+ * The method spec a hook installs: `method` as given, or the spec derived from static
+ * evidence. Exactly one of the two must be provided.
+ */
+export function resolveHookMethod(method: string | undefined, evidence: HookEvidence | undefined): string {
+  if (method && evidence) {
+    throw new FridaMcpError('INVALID_ARGUMENT', 'Pass either "method" or "evidence", not both.', [], { method });
+  }
+  if (method) return method;
+  if (!evidence) {
+    throw new FridaMcpError('INVALID_ARGUMENT', 'Provide "method" (hook notation) or "evidence" (static-analysis finding).', [
+      { tool: 'frida_help', reason: 'See the hook notation' },
+    ]);
+  }
+  const isNative = evidence.module !== undefined || evidence.offset !== undefined || evidence.address !== undefined || evidence.image_base !== undefined;
+  const isJava = evidence.class !== undefined || evidence.signature !== undefined || evidence.method !== undefined;
+  if (isNative && isJava) throw invalidEvidence('Evidence mixes native (module/offset) and Java (class/signature) fields.', evidence);
+  return isNative ? nativeEvidenceToTarget(evidence) : javaEvidenceToMethod(evidence);
+}
+
 /**
  * In-script helper: wraps an address in the Frida 17.10 options form when the caller
  * supplied `interceptorOptions`, and returns the plain address otherwise so the
@@ -102,16 +211,17 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
     'hook_method',
     {
       title: 'Hook Method',
-      description: 'Hook a method to intercept calls with auto device/session management. Provide the app target (or a session_id of an existing session) and method pattern. Supports Java methods (Android: "com.example.Class.method"), Objective-C methods (iOS: "-[NSURLSession dataTaskWithRequest:]"), and native functions in any notation: "libssl.so!SSL_read" (module export), "libfoo.so+0x1234" or "libfoo.so+4660" (module-relative offset, as shown by Ghidra/IDA), "0x7f1234567890" (absolute address), or "!open" (global export searched across all modules). Native backtraces are reported as "module+0xoff (symbol)". After hooking, use get_messages to retrieve intercepted calls.',
+      description: 'Hook a method to intercept calls with auto device/session management. Provide the app target (or a session_id of an existing session) and method pattern. Supports Java methods (Android: "com.example.Class.method"), Objective-C methods (iOS: "-[NSURLSession dataTaskWithRequest:]"), and native functions in any notation: "libssl.so!SSL_read" (module export), "libfoo.so+0x1234" or "libfoo.so+4660" (module-relative offset, as shown by Ghidra/IDA), "0x7f1234567890" (absolute address), or "!open" (global export searched across all modules). Native backtraces are reported as "module+0xoff (symbol)". Java overloads: append a signature to hook ONE overload, e.g. "com.pkg.Class.encrypt(byte[], java.lang.String)" (without one, every overload is hooked). Static-analysis findings can be passed as "evidence" instead of "method": {module, offset} (image-base-relative offset from Ghidra/IDA) or {module, address, image_base}, or {class, signature} for Java (jadx/describe_class/JVM descriptor). After hooking, use get_messages to retrieve intercepted calls.',
       inputSchema: z.object({
         target: z.string().optional().describe('App bundle ID, process name, or PID (as string). Optional when session_id is given.'),
         session_id: z.string().optional().describe('Attach the hook to this existing session (from explore_app/hook_method/get_status) instead of looking the app up by target. No new process is spawned.'),
-        method: z.string().describe('Method to hook. Java: "com.pkg.Class.method", ObjC: "-[Class method:]", Native: "lib.so!func", "lib.so+0x1234" (or decimal "lib.so+4660"), "0x7f12345678". A bare name like "open" is treated as a Java method; use "!open" or "libc.so!open" for a global native export.'),
+        method: z.string().optional().describe('Method to hook (required unless evidence is given). Java: "com.pkg.Class.method" (all overloads) or "com.pkg.Class.method(byte[], java.lang.String)" (one overload), ObjC: "-[Class method:]", Native: "lib.so!func", "lib.so+0x1234" (or decimal "lib.so+4660"), "0x7f12345678". A bare name like "open" is treated as a Java method; use "!open" or "libc.so!open" for a global native export.'),
         device: z.string().optional().describe('Device ID. Auto-selects if not specified.'),
         log_args: z.boolean().optional().default(true).describe('Log method arguments (default: true)'),
         log_retval: z.boolean().optional().default(true).describe('Log return value (default: true)'),
         log_backtrace: z.boolean().optional().default(false).describe('Log call backtrace (default: false)'),
         spawn: z.boolean().optional().default(false).describe('Spawn the app fresh instead of attaching to running process (default: false)'),
+        evidence: hookEvidenceSchema.optional(),
         interceptor_options: interceptorOptionsSchema,
         response_format: responseFormatSchema,
       }),
@@ -123,10 +233,11 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         openWorldHint: true,
       },
     },
-    async ({ target, session_id, method, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn, interceptor_options, response_format }) => {
+    async ({ target, session_id, method: methodInput, evidence, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn, interceptor_options, response_format }) => {
       const startTime = Date.now();
       try {
         const state = getState();
+        const method = resolveHookMethod(methodInput, evidence);
         const instrumentation = resolveInstrumentationTarget(target, session_id);
 
         const { sessionEntry: resolvedSession, fridaDevice, isNew } = await getOrCreateSession(deviceManager, {
@@ -232,17 +343,19 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           throw loadErr;
         }
 
-        log('info', `Hook installed on ${method} (hook: ${hookId})`);
+        const missReason = state.hooks.get(hookId)?.liveness?.reason;
+        log(missReason ? 'warn' : 'info', missReason ? `Hook on ${method} not installed: ${missReason} (hook: ${hookId})` : `Hook installed on ${method} (hook: ${hookId})`);
 
         audit({
           timestamp: new Date().toISOString(),
           sessionId: sessionEntry.id,
           tool: 'hook_method',
-          params: { target, session_id, method, log_args, log_retval, log_backtrace, interceptor_options },
+          params: { target, session_id, method, evidence, log_args, log_retval, log_backtrace, interceptor_options },
           status: 'success',
           durationMs: Date.now() - startTime,
         });
 
+        const installedHook = state.hooks.get(hookId);
         return formatToolResponse(
           buildResult(
             {
@@ -252,9 +365,14 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
               pid,
               method,
               hook_type: hookType,
-              status: 'active',
+              status: installedHook?.status ?? 'active',
+              ...(evidence ? { evidence } : {}),
+              ...(hookOptions.argTypes ? { arg_types: hookOptions.argTypes } : {}),
+              ...(installedHook?.liveness?.reason ? { liveness: installedHook.liveness } : {}),
               interceptor_options: hookOptions.interceptorOptions ?? null,
-              message: `Hook installed on ${method}. Use get_messages to retrieve intercepted calls.`,
+              message: installedHook?.liveness?.reason
+                ? `Hook on ${method} did not install (${installedHook.liveness.reason}). See liveness for details.`
+                : `Hook installed on ${method}. Use get_messages to retrieve intercepted calls.`,
             },
             [
               { tool: 'get_messages', args: { session_id: sessionEntry.id }, reason: 'Check for intercepted method calls' },
@@ -271,7 +389,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         audit({
           timestamp: new Date().toISOString(),
           tool: 'hook_method',
-          params: { target, session_id, method },
+          params: { target, session_id, method: methodInput, evidence },
           status: 'error',
           durationMs: Date.now() - startTime,
         });
@@ -294,6 +412,7 @@ interface HookAgentPayload {
   args?: unknown[];
   retval?: unknown;
   backtrace?: string[] | null;
+  availableOverloads?: string[]; // java OVERLOAD_MISMATCH: the overloads that do exist
 }
 
 /**
@@ -312,6 +431,7 @@ export function applyHookStatus(hook: HookEntry | undefined, payload: HookAgentP
     liveness.installed = false;
     if (typeof payload.classResolved === 'boolean') liveness.classResolved = payload.classResolved;
     if (payload.reason) liveness.reason = payload.reason;
+    if (Array.isArray(payload.availableOverloads)) liveness.availableOverloads = payload.availableOverloads;
     hook.status = 'error';
   }
 }
@@ -392,9 +512,7 @@ export function buildHookOptions(
   const normalized = hookType === 'native' ? normalizeInterceptorOptions(interceptorOptions) : undefined;
   if (normalized) options.interceptorOptions = normalized;
   if (hookType === 'java') {
-    const lastDot = method.lastIndexOf('.');
-    options.className = method.substring(0, lastDot);
-    options.methodName = method.substring(lastDot + 1);
+    Object.assign(options, splitJavaMethod(method));
   } else if (hookType === 'native') {
     // moduleName/funcName/address are kept for backward compatibility; the script
     // resolves the target from the parsed `nativeTarget` (see RESOLVE_TARGET_SNIPPET).
@@ -408,6 +526,35 @@ export function buildHookOptions(
     options.nativeTarget = parseTarget(method);
   }
   return options;
+}
+
+export interface JavaMethodSpec {
+  className: string;
+  methodName: string;
+  /** Canonical parameter types selecting one overload; absent = hook every overload. */
+  argTypes?: string[];
+}
+
+/**
+ * `com.pkg.Class.method` or `com.pkg.Class.method(<signature>)` -> class, method and the
+ * optional overload selector. The signature accepts every form parseJavaSignature does.
+ */
+export function splitJavaMethod(method: string): JavaMethodSpec {
+  const paren = method.indexOf('(');
+  const head = paren < 0 ? method : method.slice(0, paren).trim();
+  const lastDot = head.lastIndexOf('.');
+  const className = head.substring(0, lastDot);
+  const methodName = head.substring(lastDot + 1).replace(/^<init>$/, '$init');
+  if (paren < 0) return { className, methodName };
+  let parsed;
+  try {
+    parsed = parseJavaSignature(methodName + method.slice(paren));
+  } catch (err) {
+    throw new FridaMcpError('INVALID_ARGUMENT', `Invalid Java method signature in "${method}": ${(err as Error).message}`, [
+      { tool: 'describe_class', reason: 'List the overloads and their exact signatures' },
+    ], { method });
+  }
+  return { className, methodName, argTypes: parsed.argTypes };
 }
 
 const JAVA_HOOK_SCRIPT = `
@@ -432,21 +579,51 @@ const JAVA_HOOK_SCRIPT = `
     return;
   }
 
-  // Resolve a class across every loaded class loader, not just the default one, so a
-  // class loaded by a plugin / split-dex / custom loader is still found.
-  function useInAnyLoader(name) {
-    try { return Java.use(name); } catch (first) { /* fall through to loader walk */ }
-    var found = null;
-    try {
-      Java.enumerateClassLoaders({
-        onMatch: function (loader) {
-          if (found) return;
-          try { found = Java.ClassFactory.get(loader).use(name); } catch (e) { /* not in this loader */ }
-        },
-        onComplete: function () {}
-      });
-    } catch (e) { /* enumerateClassLoaders unavailable */ }
-    return found;
+  // useInAnyLoader(name) comes from JAVA_CLASS_LOOKUP_SNIPPET (cross-class-loader lookup).
+
+  // Canonical type ([B, java.lang.String) -> Java source form (byte[], java.lang.String).
+  var PRIMITIVES = { Z: 'boolean', B: 'byte', C: 'char', S: 'short', I: 'int', J: 'long', F: 'float', D: 'double' };
+  function arrayDepth(name) {
+    var dims = 0;
+    while (name.charAt(dims) === '[') dims++;
+    return dims;
+  }
+  // '[Ljava.lang.String;' -> 'java.lang.String', '[B' -> 'B', 'int' -> 'int'
+  function elementName(name) {
+    var element = name.substring(arrayDepth(name));
+    var isClass = element.length > 2 && element.charAt(0) === 'L' && element.charAt(element.length - 1) === ';';
+    return isClass ? element.substring(1, element.length - 1) : element;
+  }
+  function sourceType(name) {
+    var dims = arrayDepth(name);
+    if (dims === 0) return name;
+    var element = name.substring(dims);
+    var out = element.charAt(0) === 'L' ? elementName(name) : PRIMITIVES[element];
+    for (var i = 0; i < dims; i++) out += '[]';
+    return out;
+  }
+  function simpleName(className) {
+    return className.substring(Math.max(className.lastIndexOf('.'), className.lastIndexOf('$')) + 1);
+  }
+  // A requested type matches exactly, or - when given unqualified ("String", "[LString;") -
+  // by simple name with the same array depth.
+  function typeMatches(actual, wanted) {
+    if (actual === wanted) return true;
+    if (wanted.indexOf('.') >= 0) return false;
+    if (arrayDepth(actual) !== arrayDepth(wanted)) return false;
+    var a = elementName(actual), w = elementName(wanted);
+    return simpleName(a) === w || a.substring(a.length - w.length - 1) === '.' + w;
+  }
+  function overloadMatches(overload, wanted) {
+    var types = overload.argumentTypes;
+    if (types.length !== wanted.length) return false;
+    for (var i = 0; i < types.length; i++) {
+      if (!typeMatches(types[i].className, wanted[i])) return false;
+    }
+    return true;
+  }
+  function overloadSignature(overload) {
+    return o.methodName + '(' + overload.argumentTypes.map(function (t) { return sourceType(t.className); }).join(', ') + ')';
   }
 
   Java.perform(function () {
@@ -463,6 +640,16 @@ const JAVA_HOOK_SCRIPT = `
         return;
       }
       var overloads = cls[o.methodName].overloads;
+      if (Array.isArray(o.argTypes)) {
+        var all = overloads;
+        overloads = all.filter(function (ov) { return overloadMatches(ov, o.argTypes); });
+        if (overloads.length === 0) {
+          var available = all.map(overloadSignature);
+          recordHookError(o.method, new Error('no overload matches ' + o.method));
+          send({ status: 'hook_error', method: o.method, reason: 'OVERLOAD_MISMATCH', classResolved: true, availableOverloads: available, error: 'No overload of ' + o.className + '.' + o.methodName + ' matches the requested signature. Available: ' + available.join('; ') });
+          return;
+        }
+      }
       overloads.forEach(function (overload) {
         overload.implementation = function () {
           var args = [];
@@ -612,7 +799,7 @@ const NATIVE_HOOK_SCRIPT = `
 export function generateHookScript(hookType: HookType): string {
   switch (hookType) {
     case 'java':
-      return JAVA_HOOK_SCRIPT;
+      return JAVA_CLASS_LOOKUP_SNIPPET + JAVA_HOOK_SCRIPT;
     case 'objc':
       return OBJC_HOOK_SCRIPT;
     case 'native':

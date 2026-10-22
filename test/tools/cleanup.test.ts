@@ -156,7 +156,9 @@ describe('hook_method / trace_method target and session_id validation', () => {
       const schema = tool.inputSchema as Json;
       expect(schema.properties.session_id).toBeDefined();
       expect(schema.required ?? []).not.toContain('target');
-      expect(schema.required ?? []).toContain('method');
+      // hook_method takes either method or static-analysis evidence, so neither is schema-required.
+      if (name === 'hook_method') expect(schema.properties.evidence).toBeDefined();
+      else expect(schema.required ?? []).toContain('method');
     }
   });
 
