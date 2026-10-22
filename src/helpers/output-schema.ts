@@ -21,6 +21,7 @@ export const sessionContextSchema = z.object({
   platform: z.string().nullable(),
   active_sessions: z.array(z.object({ id: z.string(), target: z.string(), pid: z.number() })),
   active_hooks: z.number(),
+  active_oracles: z.number(),
   active_scripts: z.number(),
   last_detach: z
     .object({
