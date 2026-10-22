@@ -79,9 +79,29 @@ jobs:
       # (OIDC from this repo grants the io.github.monkeywave/* namespace).
       # The ubuntu-latest runner is linux/amd64; mcp-publisher is pinned for reproducibility.
       - name: Publish to the MCP registry
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
           tar -xzf mcp-publisher.tar.gz mcp-publisher
           ./mcp-publisher validate
+          # The MCP registry rejects registration until it can see the npm version we just
+          # published (it 404s against registry.npmjs.org otherwise). npm's read side lags
+          # the publish by up to a few minutes, so wait for the exact version to appear
+          # before registering — otherwise this step loses a genuine release to a race.
+          VERSION="${TAG_NAME#v}"
+          echo "Waiting for npm to serve frida-mobile-mcp@${VERSION}..."
+          for i in $(seq 1 30); do
+            if curl -fsS "https://registry.npmjs.org/frida-mobile-mcp/${VERSION}" >/dev/null 2>&1; then
+              echo "npm is serving ${VERSION}; registering with the MCP registry"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "npm did not serve ${VERSION} within ~5 min; aborting registry publish" >&2
+              exit 1
+            fi
+            echo "  not visible yet ($i/30); retrying in 10s"
+            sleep 10
+          done
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
