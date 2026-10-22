@@ -6,7 +6,7 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
 import { audit } from '../helpers/logger.js';
-import type { SessionEntry } from '../types.js';
+import { collectDelta } from '../helpers/message-delta.js';
 
 const DEFAULT_TIMEOUT_MS = 6000;
 const MAX_DELTA_MESSAGES = 50;
@@ -120,22 +120,3 @@ async function performMobileTrigger(action: string, params: Record<string, unkno
   return callMobileAction(action, params, deviceId);
 }
 
-interface DeltaMessage {
-  script_id: string;
-  script_name?: string;
-  seq: number;
-  type: string;
-  payload: unknown;
-}
-
-/** Messages across all of a session's scripts with seq strictly greater than `afterSeq`, in order. */
-function collectDelta(session: SessionEntry, afterSeq: number): DeltaMessage[] {
-  const out: DeltaMessage[] = [];
-  for (const [sid, script] of session.scripts) {
-    for (const m of script.messages) {
-      if (m.seq > afterSeq) out.push({ script_id: sid, script_name: script.name, seq: m.seq, type: m.type, payload: m.payload });
-    }
-  }
-  out.sort((a, b) => a.seq - b.seq);
-  return out;
-}

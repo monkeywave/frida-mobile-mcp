@@ -106,6 +106,26 @@
       "description": "Find where an app performs cryptography (or any API family) without assuming javax.crypto: ranked candidate hook targets across Java/ObjC classes and native symbols"
     },
     {
+      "name": "find_secrets_in_memory",
+      "description": "Scan live process memory for the STRUCTURE of secrets (not just names/byte-patterns): RC4 S-box (byte[] or Java int[256]), AES key schedule (encryption AND decryption, mode-independent), ChaCha20/Salsa20 keys (via the sigma constant), high-entropy 16/24/32-byte keys, PEM/DER private keys and JWT tokens; finds keys even when the code that uses them was never reached"
+    },
+    {
+      "name": "generate_memory_pattern",
+      "description": "Turn a located secret into a reusable anchor pattern — a stable byte signature near the key plus the offset to it — for re-locating it with scan_memory or handing it to friTap (capture_tls patterns/offsets)"
+    },
+    {
+      "name": "drive_coverage",
+      "description": "Autonomously drive an already-instrumented session's UI toward uncovered code, tapping on-screen elements breadth-first and stopping the instant a crypto/secret signal fires (or coverage stalls / max_steps); pair with monitor_crypto / trace_coverage"
+    },
+    {
+      "name": "monitor_crypto",
+      "description": "Cast a wide net over crypto: one persistent script that discovers and hooks all likely crypto sinks at once (app-owned classes, javax.crypto/Mac/MessageDigest, iOS CommonCrypto, native OpenSSL/BoringSSL) and dumps every key, input and output as hex"
+    },
+    {
+      "name": "trace_coverage",
+      "description": "Arm cheap persistent entry-hooks over a broad target set and track which are REACHED (covered) vs still COLD across trigger_and_wait drives — the reachability signal for driving an app toward unexercised code"
+    },
+    {
       "name": "watch_loads",
       "description": "Watch for late-loaded native libraries and Java classes, and anti-instrumentation (anti-Frida) probes, emitting events into the session message buffer"
     },

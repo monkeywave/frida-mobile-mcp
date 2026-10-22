@@ -238,4 +238,48 @@ Report the final script, how you verified it fired (liveness + a sample message)
       }],
     })
   );
+
+  server.registerPrompt(
+    'hunt_secrets',
+    {
+      description: 'Autonomous key-hunting workflow — arm wide-net crypto + coverage hooks, drive the UI to the crypto path hands-free, and recover the key (from a live event or from memory structure) as a reusable pattern.',
+      argsSchema: z.object({
+        package_name: z.string().describe('App bundle ID (e.g., com.example.rc4demo)'),
+        secret_kind: z.string().optional().describe('What you are after (e.g., "RC4 key", "AES key", "API token"). Defaults to any symmetric key.'),
+        platform: z.string().optional().describe('android or ios'),
+      }),
+    },
+    async ({ package_name, secret_kind, platform }) => ({
+      messages: [{
+        role: 'user' as const,
+        content: {
+          type: 'text' as const,
+          text: `You are hunting for a ${secret_kind || 'symmetric key / secret'} in ${package_name}${platform ? ` on ${platform}` : ''}. Work this loop end-to-end; prefer evidence (a key that flowed through a real crypto call, or structurally-verified bytes in memory) over guesses.
+
+## Phase 1: DISCOVER THE CRYPTO SURFACE
+1. \`explore_app({ target: "${package_name}" })\` — launch and get a live session (note the session_id). Wait ~3 s (or \`watch_loads\`) for app classes / .so to load.
+2. \`discover_crypto({ session_id })\` — find the custom crypto (e.g. a \`Rc4Client\`) and native symbols, not just the JCE.
+
+## Phase 2: ARM THE WIDE NET (arm BEFORE driving — drive_coverage arms nothing itself)
+3. \`monitor_crypto({ session_id })\` — wide-net hooks that emit a \`crypto_event\` (with key_hex / plaintext) whenever a key is set up or used.
+4. \`trace_coverage({ session_id, scope: "${package_name.split('.').slice(0, -1).join('.') || package_name}.*" })\` — a reachability map over the app package so you can watch the cold set shrink. Keep its \`coverage_id\`.
+
+## Phase 3: DRIVE TO THE CRYPTO PATH (hands-free)
+5. \`drive_coverage({ session_id, coverage_id, stop_on: "crypto_event" })\` — it taps through on-screen elements breadth-first, correlating each tap with hook output, and stops the instant a \`crypto_event\` (or any key-bearing message) fires or coverage stalls.
+6. Read the result: \`captured\` is the message that stopped it; \`newly_covered\` is the code the drive exercised. If \`stopped_reason\` is \`coverage_stalled\` / \`no_more_elements\`, the key screen was not reached — navigate manually with \`trigger_and_wait\` and re-run, or widen the coverage scope.
+
+## Phase 4: RECOVER THE KEY
+7. If a crypto_event fired: \`get_messages({ session_id, since: <loop start seq> })\` — read the full captured key_hex / plaintext and the arguments around it.
+8. If NOTHING fired (the key never flowed through a hooked call): \`find_secrets_in_memory({ session_id, scope: "heap" })\` — recover the key by STRUCTURE (an RC4 S-box = a 256-byte permutation of 0..255; an AES key schedule; a high-entropy 16/24/32-byte buffer; PEM/DER; JWT), independent of reaching the code.
+9. CONFIRM the candidate: \`read_memory({ session_id, address, size })\` to pull the full bytes, and cross-check against a crypto_event if you have one.
+
+## Phase 5: DELIVER A REUSABLE PATTERN
+10. \`generate_memory_pattern({ session_id, address })\` — emit a reusable, friTap-ready byte pattern for the located key so the find survives app restarts and feeds offline tooling.
+11. \`stop_instrumentation({ session_id })\` when done.
+
+Caveats: hardware-backed keys (Android Keystore / iOS Secure Enclave) never leave secure hardware — you will see handles and ciphertext, not raw key bytes; report that rather than chasing a key that is not in process memory. Cite the \`evidence_id\` of each tool result in your findings.`,
+        },
+      }],
+    })
+  );
 }

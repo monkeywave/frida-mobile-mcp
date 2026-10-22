@@ -13,7 +13,10 @@ spawns as needed.
 
 Registered tools: `get_status`, `frida_help`, `explore_app`,
 `detect_app_technologies`, `search_classes_and_methods`, `hook_method`,
-`hook_function`, `unhook_function`, `trace_method`, `run_prebuilt_script`,
+`hook_function`, `unhook_function`, `trace_method`, `trace_coverage`,
+`drive_coverage`, `discover_crypto`, `monitor_crypto`,
+`find_secrets_in_memory`, `generate_memory_pattern`,
+`run_prebuilt_script`,
 `bypass_ssl_pinning`, `execute_script`, `read_memory`, `write_memory`,
 `scan_memory`, `enumerate_modules`, `enumerate_exports`, `get_messages`,
 `stop_instrumentation`, `mobile_action`, `list_devices`, `select_device`,
@@ -128,6 +131,22 @@ Notes:
   `run_saved_script` and hand off a standalone CLI file with `export_script`.
 - `explore_app` accepts `class_filter` (regex); it defaults to the package
   pattern. `search_classes_and_methods` caps at `limit` (default 50).
+- Two ways past the "I hooked it but nothing fired" wall. **Recognition**:
+  `find_secrets_in_memory` scans the heap for the *structure* of a key (RC4
+  S-box, AES key schedule, high-entropy buffers, PEM/DER, JWT) and recovers it
+  without reaching the code that uses it — confirm a hit with `read_memory`.
+  **Reachability**: `trace_coverage` arms cheap entry-hooks over a scope
+  (`com.example.*`, `libfoo.so!*`) and, alternated with `trigger_and_wait`,
+  shows which targets are still COLD so you know where to keep driving.
+  `monitor_crypto` hooks every likely crypto sink at once when you don't know
+  the exact method. `find_secrets_in_memory` recognizes RC4 / AES (enc+dec, any
+  mode) / ChaCha20 / Salsa20 key structures, not just RC4.
+- To close the loop automatically, the `hunt_secrets` prompt chains
+  discover_crypto -> monitor_crypto + trace_coverage -> `drive_coverage`
+  (autonomously taps the UI toward the cold crypto path, stopping when a key
+  fires) -> find_secrets_in_memory -> `generate_memory_pattern`, which emits a
+  reusable anchor+offset signature you can re-run with `scan_memory` or hand to
+  friTap through `capture_tls` (`patterns`/`offsets`).
 - Prebuilt scripts: `ssl_pinning_bypass`, `root_jailbreak_bypass`,
   `class_enumeration`, `method_hook`, `crypto_monitor`, `network_inspector`,
   `keychain_prefs`, `filesystem_monitor`. Call `run_prebuilt_script` without

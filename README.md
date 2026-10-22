@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node >=22.12](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen.svg)](package.json)
 
-An MCP server that gives AI agents dynamic instrumentation of Android and iOS apps through Frida 17. It exposes 40 tools: high-level ones that manage devices, sessions and scripts for you (explore an app, hook a Java/ObjC/native method, trace calls, bypass SSL pinning, capture TLS keys and plaintext with friTap, run prebuilt analysis scripts, validate custom scripts) and low-level primitives (spawn/attach, module and symbol enumeration, address resolution, control-flow analysis, memory dumps). Addresses use the same `module+0xoffset` notation as Ghidra/IDA so results move between static and dynamic tools without conversion, and every result carries an evidence envelope (`evidence_id`, `limitations`, `coverage`). Optional UI automation goes through [mobile-mcp](https://github.com/mobile-next/mobile-mcp).
+An MCP server that gives AI agents dynamic instrumentation of Android and iOS apps through Frida 17. It exposes 45 tools: high-level ones that manage devices, sessions and scripts for you (explore an app, hook a Java/ObjC/native method, trace calls, map reachability coverage and autonomously drive the UI toward it, find secrets in memory and turn them into reusable friTap patterns, cast a wide net over crypto, bypass SSL pinning, capture TLS keys and plaintext with friTap, run prebuilt analysis scripts, validate custom scripts) and low-level primitives (spawn/attach, module and symbol enumeration, address resolution, control-flow analysis, memory dumps). Addresses use the same `module+0xoffset` notation as Ghidra/IDA so results move between static and dynamic tools without conversion, and every result carries an evidence envelope (`evidence_id`, `limitations`, `coverage`). Optional UI automation goes through [mobile-mcp](https://github.com/mobile-next/mobile-mcp).
 
 ## Quick start
 
@@ -73,6 +73,11 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `search_classes_and_methods` | Regex search over classes (and methods with `include_methods`) in a running app. |
 | `describe_class` | Full shape of one loaded class: every method overload with parameter/return types and a hook-ready `signature`, constructors, fields, superclass/interfaces (ObjC: selectors with type encodings). Feed a signature to `hook_method` `evidence: {class, signature}`. |
 | `discover_crypto` | Find where an app does crypto (or any API family) without assuming `javax.crypto`: ranked candidate hook targets across Java/ObjC classes and native symbols. |
+| `find_secrets_in_memory` | Content-aware memory scan for the *structure* of secrets: RC4 S-box (`byte[]` or Java `int[256]`), AES key schedule (aeskeyfind — encryption **and** decryption, mode-independent), ChaCha20/Salsa20 keys (sigma constant), high-entropy 16/24/32-byte keys, PEM/DER private keys, JWTs. Finds keys without reaching the code that uses them. |
+| `generate_memory_pattern` | Turn a located secret into a reusable **anchor pattern** (stable byte signature near the key + offset): re-locate it with `scan_memory`, or hand it to friTap via `capture_tls` (`patterns`/`offsets`). |
+| `monitor_crypto` | Crypto-oracle wide net: discover and hook **all** likely crypto sinks at once (app-owned classes + `javax.crypto`/`Mac`/`MessageDigest`, iOS CommonCrypto, native OpenSSL/BoringSSL) and dump every key, input and output as hex. |
+| `trace_coverage` | Reachability map: arm cheap persistent entry-hooks over a class/package/module scope and track **covered vs cold** targets across `trigger_and_wait` drives, so you know what code you have not yet exercised. |
+| `drive_coverage` | Autonomously drive an instrumented session's UI toward uncovered code — taps on-screen elements breadth-first and stops the instant a crypto/secret signal fires (or coverage stalls / `max_steps`). Pair with `monitor_crypto` / `trace_coverage`. |
 | `watch_loads` | Watch for late-loaded `.so` libraries and Java classes, plus anti-Frida probes; emits `watch_event` messages as the app runs. |
 | `trigger_and_wait` | Perform a UI action and block until the resulting hook/message output arrives, so you learn which hook a tap fired (or that none did). |
 | `hook_method` | Hook Java (`com.example.Class.method`), ObjC (`-[Class sel:]`) or native targets (`libssl.so!SSL_read`, `libfoo.so+0x1234`, `0x7f...`, `!open`) with auto session management; backtraces as `module+0xoff (symbol)`. |
@@ -81,7 +86,7 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `validate_script` | Syntax, type and Frida 17 removed-API check without a device. Use before `execute_script`. |
 | `run_prebuilt_script` | Run one of the 8 prebuilt scripts below; call without `script_name` to list them. |
 | `bypass_ssl_pinning` | One-click pinning bypass (Android: TrustManager, OkHttp CertificatePinner, Conscrypt; iOS: SecTrust, ATS, BoringSSL). |
-| `capture_tls` | friTap: TLS session keys (NSS key log) and optional decrypted plaintext / synthetic pcap for OpenSSL/BoringSSL, Conscrypt, NSS, GnuTLS, wolfSSL, mbedTLS, Secure Transport and more. |
+| `capture_tls` | friTap: TLS session keys (NSS key log) and optional decrypted plaintext / synthetic pcap for OpenSSL/BoringSSL, Conscrypt, NSS, GnuTLS, wolfSSL, mbedTLS, Secure Transport and more. Accepts friTap `patterns`/`offsets` (e.g. from `generate_memory_pattern` or BoringSecretHunter) for stripped libraries. |
 | `read_memory` | Read up to 4 MB at any address notation; returns hex plus absolute address and `module+offset`. |
 | `write_memory` | Write hex bytes to memory. Disabled unless `memoryWriteEnabled`. |
 | `scan_memory` | Byte-pattern scan (`48 89 5c 24 ?? 57`), optionally limited to a module. |

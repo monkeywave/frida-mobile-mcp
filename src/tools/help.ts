@@ -23,8 +23,10 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 
 ## Tool Categories
 - **Exploration**: explore_app, detect_app_technologies, search_classes_and_methods, describe_class, discover_crypto
-- **Instrumentation**: hook_method, trace_method, execute_script, validate_script, run_prebuilt_script
+- **Instrumentation**: hook_method, trace_method, trace_coverage (reachability map), execute_script, validate_script, run_prebuilt_script
 - **Observation**: watch_loads (late-loaded libs/classes + anti-Frida probes), trigger_and_wait (do a UI action, then wait for the hooks it fires)
+- **Secret recovery**: find_secrets_in_memory (RC4/AES/ChaCha/key structures in the heap), generate_memory_pattern (turn a found secret into a reusable friTap pattern), monitor_crypto (wide-net crypto-sink hooking)
+- **Reachability**: trace_coverage (covered-vs-cold map), drive_coverage (autonomously tap the UI toward uncovered code)
 - **Security / TLS**: bypass_ssl_pinning, capture_tls
 - **Memory**: read_memory, write_memory, scan_memory
 - **Native analysis** (topic \`native\`): enumerate_modules, enumerate_exports, enumerate_imports, enumerate_symbols, resolve_address, analyze_native_function, dump_module_memory, list_threads
@@ -34,9 +36,15 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 
 ## Finding the right hook target (crypto example)
 1. \`discover_crypto\` — ranked candidate classes/symbols (does NOT assume javax.crypto; finds custom Java like \`Rc4Client\` and native symbols).
-2. \`hook_method\` on the top candidate.
+2. \`hook_method\` on the top candidate, or \`monitor_crypto\` to hook EVERY likely crypto sink at once (a wide net when you don't know the exact method).
 3. \`trigger_and_wait\` — drive the app (a tap/launch) and confirm the hook fired; if nothing fires, check \`get_status\` hook liveness and re-run \`discover_crypto\`.
 4. \`watch_loads\` if the implementation loads later (native \`.so\` or dynamic dex) or the app runs anti-Frida checks.
+
+## When you cannot reach the code
+- \`find_secrets_in_memory\` — recover keys by their STRUCTURE in the heap without ever reaching the function that uses them: RC4 S-box (byte[] or Java int[256]), AES key schedule (encryption AND decryption — and MODE-INDEPENDENT: one schedule backs CBC/CTR/GCM/XTS), ChaCha20/Salsa20 (found by the "expand 32-byte k" sigma constant), high-entropy buffers, PEM/DER, JWT. Raw-key-only ciphers (AES-NI) fall back to high_entropy_key + monitor_crypto. Confirm a hit with \`read_memory\`; turn it into a reusable signature with \`generate_memory_pattern\`.
+- \`generate_memory_pattern\` — emit an anchor byte-pattern + offset-to-key for a found secret, usable by \`scan_memory\` and as a friTap ms_agent anchor / \`--offsets\` entry (feed it back via \`capture_tls\` patterns/offsets).
+- \`trace_coverage\` — arm a broad set of entry-hooks (a class, \`com.example.*\`, \`libfoo.so!*\`) and alternate \`trigger_and_wait\` with \`trace_coverage { report_only: true }\` to watch the COLD (unreached) set shrink as you drive the app.
+- \`drive_coverage\` — once hooks are armed (e.g. \`monitor_crypto\`), autonomously tap the UI breadth-first to reach uncovered code; it stops the moment a crypto/secret signal fires. The \`hunt_secrets\` prompt chains the whole flow.
 - **Advanced primitives** (topic \`advanced\`): devices, processes, sessions, hook_function/unhook_function
 
 ## Response Format
@@ -431,6 +439,8 @@ resource, or one at a time as \`frida://recipes/{name}\`.
 - **intent-deeplink-trace** — log the Intents/deep links each Activity receives.
 - **webview-bridge** — report objects exposed to page JS via addJavascriptInterface.
 - **ios-keychain-trace** — log SecItem* Keychain access.
+- **android-keystore-usage** — observe Android Keystore key USAGE (KeyStore.getKey, Cipher.init, KeyGenParameterSpec, Signature); hardware-backed keys cannot be extracted, only their use observed.
+- **string-decryptor-harness** — hook one app-defined string-decryptor method and dump every plaintext it returns (deobfuscation).
 
 ## Save / run / export
 - \`save_script\` — store an adapted script under ~/.config/frida-mobile-mcp/scripts (needs allowCustomScripts).

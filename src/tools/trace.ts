@@ -205,7 +205,7 @@ export function buildTraceOptions(
  * Shared in-script helper: converts a glob ("com.example.*", "SSL_*") into an anchored
  * RegExp. `.` is escaped BEFORE `*` is expanded so the expansion is not re-escaped.
  */
-const GLOB_HELPER = `
+export const GLOB_HELPER = `
   function globToRegExp(glob) {
     var source = String(glob).replace(/\\./g, '\\\\.').replace(/\\*/g, '.*');
     return new RegExp('^' + source + '$');

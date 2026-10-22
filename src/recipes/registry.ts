@@ -3,6 +3,8 @@ import { customJavaCryptoRecipe, javaxCryptoRecipe } from './java-crypto-key.js'
 import { nativeExportHookRecipe, registerNativesRecipe } from './native-hooks.js';
 import { classloaderRecipe, intentTraceRecipe, webviewBridgeRecipe } from './android-misc.js';
 import { keychainRecipe } from './ios-keychain.js';
+import { androidKeystoreUsageRecipe } from './android-keystore-usage.js';
+import { stringDecryptorHarnessRecipe } from './string-decryptor-harness.js';
 
 /**
  * Purpose-indexed library of classic-JS recipe snippets (see src/recipes/types.ts). The
@@ -17,6 +19,8 @@ const RECIPES: readonly Recipe[] = [
   intentTraceRecipe,
   webviewBridgeRecipe,
   keychainRecipe,
+  androidKeystoreUsageRecipe,
+  stringDecryptorHarnessRecipe,
 ];
 
 export function listRecipes(): readonly Recipe[] {

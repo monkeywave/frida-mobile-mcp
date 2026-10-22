@@ -72,6 +72,8 @@ export function registerFritapTool(server: McpServer, deviceManager: DeviceManag
         full_capture: z.boolean().default(false).describe('Also capture decrypted plaintext records (fritap_datalog messages), not only keys'),
         duration_seconds: z.number().int().min(0).max(MAX_DURATION_SECONDS).default(0).describe('Stop the capture automatically after N seconds (0 = keep running until stop_instrumentation)'),
         allow_download: z.boolean().default(true).describe('Download the pinned friTap agent from GitHub when it is not installed locally'),
+        patterns: z.unknown().optional().describe('Custom byte patterns for friTap pattern-based hooking (friTap pattern.json contents, as an object or JSON string). Pair with generate_memory_pattern output.'),
+        offsets: z.unknown().optional().describe('Custom offsets for friTap offset-based hooking (friTap offsets JSON, as an object or JSON string). Pair with generate_memory_pattern output.'),
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
@@ -105,6 +107,8 @@ interface CaptureTlsArgs {
   full_capture: boolean;
   duration_seconds: number;
   allow_download: boolean;
+  patterns?: unknown;
+  offsets?: unknown;
 }
 
 async function runCaptureTls(deviceManager: DeviceManager, args: CaptureTlsArgs) {
@@ -145,6 +149,8 @@ async function runCaptureTls(deviceManager: DeviceManager, args: CaptureTlsArgs)
       fullCapture,
       keylog: true,
       spawned: needsResume,
+      patterns: args.patterns,
+      offsets: args.offsets,
     });
     connectMessageSink(sessionEntry, scriptId, script, capture, initial);
     // Keep agent console.* out of stdout (the stdio JSON-RPC channel); the bespoke

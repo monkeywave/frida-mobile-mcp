@@ -6,6 +6,7 @@ import type {
   SessionEntry,
   HookEntry,
   TraceEntry,
+  CoverageEntry,
   ScriptEntry,
   MessageEntry,
   SessionContext,
@@ -29,6 +30,7 @@ class ServerState {
   sessions: Map<string, SessionEntry> = new Map();
   hooks: Map<string, HookEntry> = new Map();
   traces: Map<string, TraceEntry> = new Map();
+  coverage: Map<string, CoverageEntry> = new Map();
   config: FridaMcpConfig;
   /** Ring buffer (newest last) of recent session detaches and process crashes. */
   recentDetaches: DetachRecord[] = [];
@@ -92,6 +94,7 @@ class ServerState {
     this.sessions.delete(sessionId);
     this.dropHooksForSession(sessionId);
     this.dropTracesForSession(sessionId);
+    this.dropCoverageForSession(sessionId);
 
     return unloadScripts(session);
   }
@@ -108,6 +111,14 @@ class ServerState {
     for (const [traceId, trace] of this.traces) {
       if (trace.sessionId === sessionId) {
         this.traces.delete(traceId);
+      }
+    }
+  }
+
+  private dropCoverageForSession(sessionId: string): void {
+    for (const [coverageId, entry] of this.coverage) {
+      if (entry.sessionId === sessionId) {
+        this.coverage.delete(coverageId);
       }
     }
   }
@@ -328,6 +339,7 @@ class ServerState {
     }
     this.hooks.clear();
     this.traces.clear();
+    this.coverage.clear();
 
     try {
       const { disconnectMobileMcp } = await import('./mobile-mcp/client.js');

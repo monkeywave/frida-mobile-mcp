@@ -116,6 +116,25 @@ export interface TraceEntry {
   startedAt: number;
 }
 
+/**
+ * A persistent coverage run (trace_coverage): a broad set of cheap entry-hooks whose purpose is
+ * not to log calls but to answer "which of these targets have I reached, and which are still
+ * COLD?" — the reachability signal for a drive loop. `allTargets` is the full installed set
+ * captured when the run is armed; a target is added to `hits` the first time it fires (the agent
+ * dedupes, so `hits.hits` is always 1 — a "reached" marker, not a call count) and accumulates
+ * across `trigger_and_wait` drives. Cold = `allTargets` minus `hits.keys()`. `firstSeenTs` mirrors
+ * HookLiveness's "fired" convention.
+ */
+export interface CoverageEntry {
+  id: string;
+  scriptId: string;
+  sessionId: string;
+  scope: string;
+  allTargets: string[];
+  hits: Map<string, { hits: number; firstSeenTs: number }>;
+  createdAt: number;
+}
+
 // Tool return value structure.
 // evidence_id / limitations / coverage follow the REA/ReVa evidence conventions so that
 // results from this server can be cited next to static-analysis findings.
