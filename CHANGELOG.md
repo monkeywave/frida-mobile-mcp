@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.3.0...v0.5.0) (2026-10-22)
+
+
+### Features
+
+* improved the different scripts ([e08b67a](https://github.com/monkeywave/frida-mobile-mcp/commit/e08b67ac6c0938d2c352cde45ba1f3a9994a141f))
+
+
+### Miscellaneous
+
+* release 0.4.0 ([fcd3934](https://github.com/monkeywave/frida-mobile-mcp/commit/fcd393418208981247a745d6df1f818021a62c87))
+* release 0.5.0 ([5586f90](https://github.com/monkeywave/frida-mobile-mcp/commit/5586f90ce91f8419357b44be24732f8dc89561db))
+
 ## [0.3.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.2.3...v0.3.0) (2026-10-21)
 
 
