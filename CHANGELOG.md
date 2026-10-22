@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.1](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.5.0...v0.5.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* add active_oracles to the session_context output schema ([75919d4](https://github.com/monkeywave/frida-mobile-mcp/commit/75919d4ecbf012e8f369cd969adec2464a685b8e))
+
+
+### Miscellaneous
+
+* release 0.5.1 ([b4e22a7](https://github.com/monkeywave/frida-mobile-mcp/commit/b4e22a72e0e50e770ab44333c98e3cbfbc881428))
+
 ## [0.5.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.3.0...v0.5.0) (2026-10-22)
 
 
