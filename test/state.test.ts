@@ -203,13 +203,17 @@ describe('ServerState', () => {
   });
 
   describe('removeSession', () => {
-    it('synchronously deletes the session and its hooks/traces, keeping other sessions intact', () => {
+    it('synchronously deletes the session and its hooks/traces/coverage/oracles, keeping other sessions intact', () => {
       state.addSession(makeSession('s1', 1));
       state.addSession(makeSession('s2', 2));
       state.hooks.set('h1', makeHook('h1', 's1'));
       state.hooks.set('h2', makeHook('h2', 's2'));
       state.traces.set('t1', makeTrace('t1', 's1'));
       state.traces.set('t2', makeTrace('t2', 's2'));
+      state.coverage.set('c1', { id: 'c1', scriptId: 'sc1', sessionId: 's1', scope: 'x', allTargets: [], hits: new Map(), createdAt: Date.now() });
+      state.coverage.set('c2', { id: 'c2', scriptId: 'sc2', sessionId: 's2', scope: 'y', allTargets: [], hits: new Map(), createdAt: Date.now() });
+      state.oracles.set('o1', { id: 'o1', scriptId: 'sc1', sessionId: 's1', pattern: 'rc4', eventCount: 0, createdAt: Date.now() });
+      state.oracles.set('o2', { id: 'o2', scriptId: 'sc2', sessionId: 's2', pattern: 'rc4', eventCount: 0, createdAt: Date.now() });
 
       const result = state.removeSession('s1');
 
@@ -220,6 +224,10 @@ describe('ServerState', () => {
       expect(state.hooks.has('h2')).toBe(true);
       expect(state.traces.has('t1')).toBe(false);
       expect(state.traces.has('t2')).toBe(true);
+      expect(state.coverage.has('c1')).toBe(false);
+      expect(state.coverage.has('c2')).toBe(true);
+      expect(state.oracles.has('o1')).toBe(false);
+      expect(state.oracles.has('o2')).toBe(true);
     });
 
     it('unloads non-destroyed scripts and skips destroyed ones', async () => {
@@ -484,11 +492,13 @@ describe('ServerState', () => {
       session.scripts.set('b', makeScript('b'));
       state.addSession(session);
       state.hooks.set('h1', makeHook('h1', 's1'));
+      state.oracles.set('o1', { id: 'o1', scriptId: 'a', sessionId: 's1', pattern: 'rc4', eventCount: 0, createdAt: Date.now() });
 
       const context = state.getSessionContext();
 
       expect(context.active_sessions).toEqual([{ id: 's1', target: 'com.example', pid: 1 }]);
       expect(context.active_hooks).toBe(1);
+      expect(context.active_oracles).toBe(1);
       expect(context.active_scripts).toBe(2);
     });
   });
@@ -503,6 +513,8 @@ describe('ServerState', () => {
       state.addSession(s2);
       state.hooks.set('h1', makeHook('h1', 's1'));
       state.traces.set('t1', makeTrace('t1', 's2'));
+      state.coverage.set('c1', { id: 'c1', scriptId: 'sc', sessionId: 's1', scope: 'x', allTargets: [], hits: new Map(), createdAt: Date.now() });
+      state.oracles.set('o1', { id: 'o1', scriptId: 'sc', sessionId: 's1', pattern: 'rc4', eventCount: 0, createdAt: Date.now() });
       state.startCleanupTimer();
       const stopSpy = vi.spyOn(state, 'stopCleanupTimer');
 
@@ -511,6 +523,8 @@ describe('ServerState', () => {
       expect(state.sessions.size).toBe(0);
       expect(state.hooks.size).toBe(0);
       expect(state.traces.size).toBe(0);
+      expect(state.coverage.size).toBe(0);
+      expect(state.oracles.size).toBe(0);
       expect(s1.session.detach).toHaveBeenCalledTimes(1);
       expect(s2.session.detach).toHaveBeenCalledTimes(1);
       expect(script.script.unload).toHaveBeenCalledTimes(1);

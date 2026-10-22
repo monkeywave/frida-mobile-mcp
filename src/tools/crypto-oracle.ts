@@ -10,6 +10,7 @@ import { getOrCreateSession } from '../helpers/session-helper.js';
 import { createAgentScript } from '../agent/script-factory.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
 import type { BridgeName } from '../agent/bridges.js';
+import type { OracleEntry } from '../types.js';
 import { getState } from '../state.js';
 import { buildTemplateBody } from '../scripts/template-body.js';
 
@@ -115,6 +116,18 @@ export function registerCryptoOracleTool(server: McpServer, deviceManager: Devic
           createdAt: Date.now(),
         });
 
+        // Track the oracle as a first-class instrument (like hooks/traces/coverage) so the agent can
+        // resolve oracle_id, see its event count via get_status, and have it torn down on stop.
+        const oracle: OracleEntry = {
+          id: oracleId,
+          scriptId,
+          sessionId: sessionEntry.id,
+          pattern: effectivePattern,
+          eventCount: 0,
+          createdAt: Date.now(),
+        };
+        state.oracles.set(oracleId, oracle);
+
         // The agent's reportSummary() init_complete arrives from reportSummary() — usually during
         // load, but frida-node may deliver the message in a later turn, so we await it (bounded)
         // rather than reading `summary` synchronously after load() and risking null hook counts.
@@ -132,6 +145,8 @@ export function registerCryptoOracleTool(server: McpServer, deviceManager: Devic
               onInit();
               return;
             }
+            oracle.eventCount++;
+            oracle.lastEventTs = Date.now();
             state.addMessageToScript(sessionEntry.id, scriptId, { timestamp: Date.now(), type: 'crypto_event', payload, data: data ?? null });
           },
         });
@@ -140,6 +155,7 @@ export function registerCryptoOracleTool(server: McpServer, deviceManager: Devic
           await script.load();
         } catch (loadErr) {
           sessionEntry.scripts.delete(scriptId);
+          state.oracles.delete(oracleId);
           throw loadErr;
         }
 

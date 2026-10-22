@@ -154,6 +154,21 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
           calls: t.callCount,
         }));
 
+        // Coverage runs: how much of each armed set has been reached (covered vs. total).
+        const coverage = Array.from(state.coverage.values()).map((c) => ({
+          id: c.id,
+          scope: c.scope,
+          covered: c.hits.size,
+          total: c.allTargets.length,
+        }));
+
+        // Crypto oracles: how many crypto_event hits each has captured so far.
+        const oracles = Array.from(state.oracles.values()).map((o) => ({
+          id: o.id,
+          pattern: o.pattern,
+          events: o.eventCount,
+        }));
+
         const result = buildResult(
           {
             devices,
@@ -161,6 +176,8 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
             sessions,
             hooks,
             traces,
+            coverage,
+            oracles,
             recent_detaches: recentDetaches,
             config: {
               custom_scripts_enabled: state.config.allowCustomScripts,

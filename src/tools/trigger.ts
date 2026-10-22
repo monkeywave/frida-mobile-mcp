@@ -6,7 +6,7 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
 import { audit } from '../helpers/logger.js';
-import { collectDelta } from '../helpers/message-delta.js';
+import { triggerAndCollect } from '../helpers/trigger-and-collect.js';
 
 const DEFAULT_TIMEOUT_MS = 6000;
 const MAX_DELTA_MESSAGES = 50;
@@ -46,22 +46,17 @@ export function registerTriggerTool(server: McpServer): void {
 
         const minCount = expect_messages ?? 1;
         const timeoutMs = timeout_ms ?? DEFAULT_TIMEOUT_MS;
-        // Cursor BEFORE the trigger, so any message the trigger causes counts as new.
-        const afterSeq = state.currentMessageSeq();
 
-        let triggerResult: unknown = null;
-        if (action) {
-          triggerResult = await performMobileTrigger(action, params, session.deviceId);
-        }
+        // Guard the capability before the shared primitive performs the action. The single-shot
+        // call is intentionally left unbounded (no callTimeoutMs) — only the wait is bounded.
+        if (action) guardMobileEnabled();
 
-        const reached = await state.waitForNewMessages(session_id, afterSeq, minCount, timeoutMs);
+        const { reached, delta, firedScriptIds, actionResult: triggerResult, afterSeq } =
+          await triggerAndCollect(session, { action, params, minCount, timeoutMs });
 
-        // Collect exactly the messages produced since the trigger, and which hooks fired.
-        // "Fired" = a hook whose script emitted a message in this delta. Deriving it from the
-        // delta (not a one-time firstSeenTs) means a hook that already fired before still shows
+        // Which hooks fired: a hook whose script emitted a message in this delta. Deriving it from
+        // the delta (not a one-time firstSeenTs) means a hook that already fired before still shows
         // up as fired on later triggers — which is the whole point of the tool.
-        const delta = collectDelta(session, afterSeq);
-        const firedScriptIds = new Set(delta.map((d) => d.script_id));
         const firedHooks = Array.from(state.hooks.values())
           .filter((h) => h.sessionId === session_id && firedScriptIds.has(h.scriptId))
           .map((h) => ({ id: h.id, target: h.target, type: h.type }));
@@ -108,15 +103,12 @@ export function registerTriggerTool(server: McpServer): void {
   );
 }
 
-/** Perform a mobile-mcp action as the trigger, injecting the session's device like mobile_action does. */
-async function performMobileTrigger(action: string, params: Record<string, unknown> | undefined, deviceId: string | undefined): Promise<unknown> {
-  const state = getState();
-  if (!state.config.mobileMcp.enabled) {
+/** Refuse an action trigger when mobile-mcp is off, with the contextual "just wait" suggestion. */
+function guardMobileEnabled(): void {
+  if (!getState().config.mobileMcp.enabled) {
     throw new FridaMcpError('MOBILE_ERROR', 'mobile-mcp integration is disabled in config; omit `action` to just wait.', [
       { tool: 'trigger_and_wait', reason: 'Call without an action to wait for the next messages' },
     ]);
   }
-  const { callMobileAction } = await import('../mobile-mcp/call.js');
-  return callMobileAction(action, params, deviceId);
 }
 

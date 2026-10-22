@@ -1,6 +1,6 @@
 {
   "name": "frida-mobile-mcp",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
   "homepage": "https://github.com/monkeywave/frida-mobile-mcp#readme",
   "bugs": {

@@ -3,7 +3,7 @@
   "name": "io.github.monkeywave/frida-mobile-mcp",
   "title": "Frida Mobile MCP",
   "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "websiteUrl": "https://github.com/monkeywave/frida-mobile-mcp",
   "repository": {
     "url": "https://github.com/monkeywave/frida-mobile-mcp",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "frida-mobile-mcp",
-      "version": "0.3.0",
+      "version": "0.5.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

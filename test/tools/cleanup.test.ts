@@ -40,6 +40,8 @@ describe('unload_script MCP tool', () => {
     state.sessions.clear();
     state.hooks.clear();
     state.traces.clear();
+    state.coverage.clear();
+    state.oracles.clear();
   });
 
   it('is registered as a destructive, idempotent, closed-world tool', async () => {
@@ -60,6 +62,10 @@ describe('unload_script MCP tool', () => {
     seedHook(state, 'hook-other', OTHER_SCRIPT_ID);
     seedTrace(state, 'trace-a', SCRIPT_ID);
     seedTrace(state, 'trace-other', OTHER_SCRIPT_ID);
+    state.coverage.set('cov-a', { id: 'cov-a', scriptId: SCRIPT_ID, sessionId: SESSION_ID, scope: 'x', allTargets: [], hits: new Map(), createdAt: Date.now() });
+    state.coverage.set('cov-other', { id: 'cov-other', scriptId: OTHER_SCRIPT_ID, sessionId: SESSION_ID, scope: 'y', allTargets: [], hits: new Map(), createdAt: Date.now() });
+    state.oracles.set('oracle-a', { id: 'oracle-a', scriptId: SCRIPT_ID, sessionId: SESSION_ID, pattern: 'rc4', eventCount: 0, createdAt: Date.now() });
+    state.oracles.set('oracle-other', { id: 'oracle-other', scriptId: OTHER_SCRIPT_ID, sessionId: SESSION_ID, pattern: 'rc4', eventCount: 0, createdAt: Date.now() });
 
     const parsed = await callJson(client, 'unload_script', { session_id: SESSION_ID, script_id: SCRIPT_ID });
 
@@ -71,6 +77,8 @@ describe('unload_script MCP tool', () => {
       unloaded: true,
       removed_hooks: 2,
       removed_traces: 1,
+      removed_coverage: 1,
+      removed_oracles: 1,
     });
     expect(target.unloadCalls).toBe(1);
     expect(other.unloadCalls).toBe(0);
@@ -79,6 +87,8 @@ describe('unload_script MCP tool', () => {
     expect(state.sessions.has(SESSION_ID)).toBe(true);
     expect(Array.from(state.hooks.keys())).toEqual(['hook-other']);
     expect(Array.from(state.traces.keys())).toEqual(['trace-other']);
+    expect(Array.from(state.coverage.keys())).toEqual(['cov-other']);
+    expect(Array.from(state.oracles.keys())).toEqual(['oracle-other']);
     expect(parsed.suggested_next.map((s: Json) => s.tool)).toEqual(['get_status', 'get_messages']);
   });
 

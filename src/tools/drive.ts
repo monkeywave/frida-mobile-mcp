@@ -7,7 +7,9 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
 import { audit } from '../helpers/logger.js';
-import { collectDelta, type DeltaMessage } from '../helpers/message-delta.js';
+import { type DeltaMessage } from '../helpers/message-delta.js';
+import { triggerAndCollect } from '../helpers/trigger-and-collect.js';
+import { withTimeout } from '../helpers/with-timeout.js';
 
 const DEFAULT_STOP_ON = 'crypto_event';
 const DEFAULT_MAX_STEPS = 12;
@@ -151,20 +153,22 @@ export function registerDriveTool(server: McpServer, _deviceManager: DeviceManag
           tried.add(next.key);
 
           // 2. Tap it, then block until this tap drives at least one new message (or times out).
-          const afterSeq = state.currentMessageSeq();
+          // The same snapshot → tap → wait → delta primitive as trigger_and_wait; the UI call is
+          // bounded by callTimeoutMs so a stuck tap cannot hang the loop.
+          let delta: DeltaMessage[];
           try {
-            await withTimeout(
-              callMobileAction('mobile_click_on_screen_at_coordinates', { x: next.x, y: next.y }, session.deviceId),
-              UI_CALL_TIMEOUT_MS,
-              'mobile_click_on_screen_at_coordinates',
-            );
+            ({ delta } = await triggerAndCollect(session, {
+              action: 'mobile_click_on_screen_at_coordinates',
+              params: { x: next.x, y: next.y },
+              minCount: 1,
+              timeoutMs: stepTimeoutMs,
+              callTimeoutMs: UI_CALL_TIMEOUT_MS,
+            }));
           } catch (err) {
             stoppedReason = 'ui_error';
             limitations.push(`Could not tap "${next.label}" at (${next.x}, ${next.y}): ${err instanceof Error ? err.message : String(err)}`);
             break;
           }
-          await state.waitForNewMessages(session_id, afterSeq, 1, stepTimeoutMs);
-          const delta = collectDelta(session, afterSeq);
 
           // 3. Fold the results of this tap into the running record.
           const stepRecord: DriveStep = {
@@ -427,16 +431,4 @@ function isNum(v: unknown): v is number {
 function firstNum(...vals: unknown[]): number | null {
   for (const v of vals) if (isNum(v)) return v;
   return null;
-}
-
-/** Reject a promise if it does not settle within `ms`, so a stuck mobile call cannot hang the loop. */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    timer.unref?.();
-    p.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
 }

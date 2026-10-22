@@ -133,6 +133,8 @@ function registerUnloadScriptTool(server: McpServer): void {
         sessionEntry.scripts.delete(script_id);
         const removedHooks = dropHooksForScript(state, script_id);
         const removedTraces = dropTracesForScript(state, script_id);
+        const removedCoverage = dropCoverageForScript(state, script_id);
+        const removedOracles = dropOraclesForScript(state, script_id);
         state.touchSession(session_id);
 
         log('info', `Script ${script_id} (${scriptEntry.name ?? 'unnamed'}) unloaded from session ${session_id}`);
@@ -153,6 +155,8 @@ function registerUnloadScriptTool(server: McpServer): void {
               unloaded: true,
               removed_hooks: removedHooks,
               removed_traces: removedTraces,
+              removed_coverage: removedCoverage,
+              removed_oracles: removedOracles,
             },
             [
               { tool: 'get_status', reason: 'Verify the remaining scripts on the session' },
@@ -229,6 +233,28 @@ function dropTracesForScript(state: ReturnType<typeof getState>, scriptId: strin
   for (const [traceId, trace] of state.traces) {
     if (trace.scriptId === scriptId) {
       state.traces.delete(traceId);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+function dropCoverageForScript(state: ReturnType<typeof getState>, scriptId: string): number {
+  let removed = 0;
+  for (const [coverageId, entry] of state.coverage) {
+    if (entry.scriptId === scriptId) {
+      state.coverage.delete(coverageId);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+function dropOraclesForScript(state: ReturnType<typeof getState>, scriptId: string): number {
+  let removed = 0;
+  for (const [oracleId, entry] of state.oracles) {
+    if (entry.scriptId === scriptId) {
+      state.oracles.delete(oracleId);
       removed++;
     }
   }

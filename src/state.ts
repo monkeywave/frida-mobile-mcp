@@ -7,6 +7,7 @@ import type {
   HookEntry,
   TraceEntry,
   CoverageEntry,
+  OracleEntry,
   ScriptEntry,
   MessageEntry,
   SessionContext,
@@ -31,6 +32,7 @@ class ServerState {
   hooks: Map<string, HookEntry> = new Map();
   traces: Map<string, TraceEntry> = new Map();
   coverage: Map<string, CoverageEntry> = new Map();
+  oracles: Map<string, OracleEntry> = new Map();
   config: FridaMcpConfig;
   /** Ring buffer (newest last) of recent session detaches and process crashes. */
   recentDetaches: DetachRecord[] = [];
@@ -95,6 +97,7 @@ class ServerState {
     this.dropHooksForSession(sessionId);
     this.dropTracesForSession(sessionId);
     this.dropCoverageForSession(sessionId);
+    this.dropOraclesForSession(sessionId);
 
     return unloadScripts(session);
   }
@@ -119,6 +122,14 @@ class ServerState {
     for (const [coverageId, entry] of this.coverage) {
       if (entry.sessionId === sessionId) {
         this.coverage.delete(coverageId);
+      }
+    }
+  }
+
+  private dropOraclesForSession(sessionId: string): void {
+    for (const [oracleId, entry] of this.oracles) {
+      if (entry.sessionId === sessionId) {
+        this.oracles.delete(oracleId);
       }
     }
   }
@@ -268,6 +279,7 @@ class ServerState {
         pid: s.pid,
       })),
       active_hooks: this.hooks.size,
+      active_oracles: this.oracles.size,
       active_scripts: Array.from(this.sessions.values()).reduce(
         (count, s) => count + s.scripts.size,
         0
@@ -340,6 +352,7 @@ class ServerState {
     this.hooks.clear();
     this.traces.clear();
     this.coverage.clear();
+    this.oracles.clear();
 
     try {
       const { disconnectMobileMcp } = await import('./mobile-mcp/client.js');

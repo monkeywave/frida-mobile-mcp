@@ -135,6 +135,23 @@ export interface CoverageEntry {
   createdAt: number;
 }
 
+/**
+ * A persistent crypto oracle (monitor_crypto): a wide net of crypto-sink hooks that streams
+ * `crypto_event` messages as the app encrypts/decrypts. Tracked like the other persistent
+ * instruments so an agent can resolve the `oracle_id` it was handed, see how many events it has
+ * captured via get_status, and have it torn down on unload_script / session stop. `eventCount`
+ * counts only `crypto_event` messages (init/status messages are excluded).
+ */
+export interface OracleEntry {
+  id: string;
+  scriptId: string;
+  sessionId: string;
+  pattern: string;
+  eventCount: number;
+  lastEventTs?: number;
+  createdAt: number;
+}
+
 // Tool return value structure.
 // evidence_id / limitations / coverage follow the REA/ReVa evidence conventions so that
 // results from this server can be cited next to static-analysis findings.
@@ -173,6 +190,7 @@ export interface SessionContext {
     pid: number;
   }>;
   active_hooks: number;
+  active_oracles: number;
   active_scripts: number;
   last_detach?: {
     target: string;

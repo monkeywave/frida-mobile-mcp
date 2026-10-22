@@ -103,6 +103,25 @@ describe('monitor_crypto MCP tool', () => {
     expect(parsed.options.pattern).toBe(hostile);
   });
 
+  it('tracks the oracle as a first-class state entry and counts crypto_event hits', async () => {
+    const parsed = await callJson(client, 'monitor_crypto', { target: TARGET });
+    const state = getState();
+
+    const oracle = state.oracles.get(parsed.result.oracle_id);
+    expect(oracle).toBeDefined();
+    expect(oracle!.scriptId).toBe(parsed.result.script_id);
+    expect(oracle!.sessionId).toBe(parsed.result.session_id);
+    expect(oracle!.pattern).toContain('rc4');
+    // init_complete arrived on load as a crypto_status — it is not a crypto_event, so it is not counted.
+    expect(oracle!.eventCount).toBe(0);
+    expect(oracle!.lastEventTs).toBeUndefined();
+
+    // A real crypto sink firing increments the live count surfaced by get_status.
+    oracleScript().emit({ type: 'send', payload: { key_hex: 'deadbeef' } });
+    expect(state.oracles.get(parsed.result.oracle_id)!.eventCount).toBe(1);
+    expect(state.oracles.get(parsed.result.oracle_id)!.lastEventTs).toEqual(expect.any(Number));
+  });
+
   it('records the init_complete in the persistent script message buffer', async () => {
     const parsed = await callJson(client, 'monitor_crypto', { target: TARGET });
     const session = getState().sessions.get(parsed.result.session_id)!;
