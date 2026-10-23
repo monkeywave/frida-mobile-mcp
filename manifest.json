@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "frida-mobile-mcp",
   "display_name": "Frida Mobile MCP",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
   "long_description": "An MCP server that drives Frida dynamic instrumentation on Android and iOS devices. It lets an AI assistant explore apps, hook Java/Objective-C/native methods, trace calls, bypass SSL pinning, inspect memory, run pre-built analysis scripts, and (optionally) automate the device UI through mobile-mcp. A device with frida-server running (or an emulator/jailbroken device) must be reachable from this machine.",
   "author": {
