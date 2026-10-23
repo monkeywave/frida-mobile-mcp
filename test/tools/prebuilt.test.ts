@@ -37,11 +37,11 @@ describe('run_prebuilt_script MCP tool', () => {
     emitOnLoad = [];
   });
 
-  it('lists all eight built-in scripts when called without a script_name', async () => {
+  it('lists all nine built-in scripts when called without a script_name', async () => {
     const parsed = await callJson(client, 'run_prebuilt_script', {});
     expect(parsed.error).toBeUndefined();
     const names = parsed.result.available_scripts.map((s: any) => s.name);
-    expect(names).toHaveLength(8);
+    expect(names).toHaveLength(9);
     expect(names).toContain('ssl_pinning_bypass');
     expect(names).toContain('crypto_monitor');
     // Each entry carries the metadata agents use to choose a script.

@@ -239,10 +239,132 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         const state = getState();
         const session = state.getSession(session_id);
         if (!session) throw new FridaMcpError('SESSION_NOT_FOUND', `Session "${session_id}" not found.`, []);
-        for (const s of session.scripts.values()) { try { await s.script.unload(); } catch {} }
+        // Eternalized scripts are intentionally pinned in the target and outlive the session, so
+        // don't try to unload them (that is the whole point of eternalize_script).
+        for (const s of session.scripts.values()) { if (s.eternalized) continue; try { await s.script.unload(); } catch {} }
         await session.session.detach();
         state.removeSession(session_id);
         return formatToolResponse(buildResult({ session_id, status: 'detached' }, [{ tool: 'get_status', reason: 'Check state' }]), response_format);
+      } catch (err) {
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
+      }
+    }
+  );
+
+  server.registerTool(
+    'spawn_gating',
+    {
+      title: 'Spawn Gating',
+      description: 'Enable, disable, or list device-wide spawn gating. When enabled, every newly spawned process (including app-launched child/isolated processes that often run RASP/anti-Frida checks) is held suspended until released. Use "list" to see pending spawns and children, then attach_process + hook_method, and resume_process to release each by PID.',
+      inputSchema: z.object({
+        action: z.enum(['enable', 'disable', 'list']).describe('enable/disable gating, or list currently pending spawns and children.'),
+        device: z.string().optional().describe('Device ID. Uses the selected/default device when omitted.'),
+        response_format: responseFormatSchema,
+      }),
+      outputSchema: toolOutputSchema(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ action, device: deviceId, response_format }) => {
+      try {
+        const state = getState();
+        const device = deviceId
+          ? await deviceManager.resolve({ deviceId })
+          : state.selectedDevice || await deviceManager.resolve();
+        state.selectedDevice = device;
+
+        if (action === 'enable') {
+          await device.enableSpawnGating();
+          return formatToolResponse(buildResult({ spawn_gating: 'enabled', device: device.id }, [
+            { tool: 'spawn_gating', args: { action: 'list' }, reason: 'List spawns as they are held' },
+          ]), response_format);
+        }
+        if (action === 'disable') {
+          await device.disableSpawnGating();
+          return formatToolResponse(buildResult({ spawn_gating: 'disabled', device: device.id }, []), response_format);
+        }
+        const [spawns, children] = await Promise.all([
+          device.enumeratePendingSpawn(),
+          device.enumeratePendingChildren(),
+        ]);
+        return formatToolResponse(buildResult({
+          pending_spawn: spawns.map((s) => ({ pid: s.pid, identifier: s.identifier })),
+          pending_children: children.map((c) => ({ pid: c.pid, parent_pid: c.parentPid, identifier: c.identifier, path: c.path })),
+          hint: 'Attach + hook each PID, then resume_process to release it. Android kills a process suspended > ~10s, so act promptly.',
+        }, [
+          { tool: 'attach_process', reason: 'Attach to a pending PID before it is resumed' },
+          { tool: 'resume_process', reason: 'Release a held spawn by PID' },
+        ]), response_format);
+      } catch (err) {
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
+      }
+    }
+  );
+
+  server.registerTool(
+    'child_gating',
+    {
+      title: 'Child Gating',
+      description: 'Enable or disable child gating on an existing session. When enabled, processes forked/exec\'d by the instrumented process are held so they can be instrumented too (e.g. an app that moves detection into a child process). Requires device-wide spawn gating to catch the held children; list them with spawn_gating action="list".',
+      inputSchema: z.object({
+        session_id: z.string().describe('Session to enable/disable child gating on.'),
+        enabled: z.boolean().default(true).describe('true enables child gating, false disables it.'),
+        response_format: responseFormatSchema,
+      }),
+      outputSchema: toolOutputSchema(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ session_id, enabled, response_format }) => {
+      try {
+        const state = getState();
+        const entry = state.getSession(session_id);
+        if (!entry) throw new FridaMcpError('SESSION_NOT_FOUND', `Session "${session_id}" not found.`, []);
+        if (enabled) await entry.session.enableChildGating();
+        else await entry.session.disableChildGating();
+        return formatToolResponse(buildResult({ session_id, child_gating: enabled ? 'enabled' : 'disabled' }, [
+          { tool: 'spawn_gating', args: { action: 'list' }, reason: 'List held children' },
+        ]), response_format);
+      } catch (err) {
+        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
+      }
+    }
+  );
+
+  server.registerTool(
+    'eternalize_script',
+    {
+      title: 'Eternalize Script',
+      description: "Make a loaded script survive session detach: frida pins it in the target so it keeps running after we detach (or the host exits). Trade-off — once eternalized the script can no longer send messages back, be unloaded, or be inspected; it is fire-and-forget persistence. Use it to leave a bypass/monitor running while you free the session. Give the session_id and the script_id returned by hook_method / execute_script / watch_loads.",
+      inputSchema: z.object({
+        session_id: z.string().describe('Session that owns the script.'),
+        script_id: z.string().describe('Script to eternalize (the script_id from a hook/trace/watch/execute result).'),
+        response_format: responseFormatSchema,
+      }),
+      outputSchema: toolOutputSchema(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ session_id, script_id, response_format }) => {
+      try {
+        const state = getState();
+        const entry = state.getSession(session_id);
+        if (!entry) throw new FridaMcpError('SESSION_NOT_FOUND', `Session "${session_id}" not found.`, []);
+        const scriptEntry = entry.scripts.get(script_id);
+        if (!scriptEntry) {
+          throw new FridaMcpError('SCRIPT_NOT_FOUND', `Script "${script_id}" not found in session "${session_id}".`, [
+            { tool: 'get_status', reason: 'List sessions and their scripts' },
+          ]);
+        }
+        await scriptEntry.script.eternalize();
+        scriptEntry.eternalized = true;
+        scriptEntry.persistent = true;
+        log('info', `Eternalized script ${script_id} in session ${session_id}`);
+        return formatToolResponse(buildResult({
+          session_id,
+          script_id,
+          status: 'eternalized',
+          message: 'Script pinned in the target; it survives detach but can no longer be messaged or unloaded.',
+        }, [
+          { tool: 'detach_session', args: { session_id }, reason: 'Free the session while the script keeps running' },
+        ]), response_format);
       } catch (err) {
         return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }

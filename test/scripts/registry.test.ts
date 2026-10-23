@@ -8,8 +8,8 @@ describe('ScriptRegistry', () => {
     expect(getScriptRegistry()).toBe(registry);
   });
 
-  it('has all 8 scripts registered', () => {
-    expect(registry.listAll()).toHaveLength(8);
+  it('has all 9 scripts registered', () => {
+    expect(registry.listAll()).toHaveLength(9);
   });
 
   it('can get each script by name', () => {
@@ -39,7 +39,7 @@ describe('ScriptRegistry', () => {
   });
 
   it('each script has valid category', () => {
-    const validCategories = ['bypass', 'enumeration', 'security', 'network', 'crypto', 'filesystem'];
+    const validCategories = ['bypass', 'enumeration', 'security', 'network', 'crypto', 'filesystem', 'detection'];
     for (const script of registry.listAll()) {
       expect(validCategories).toContain(script.category);
     }

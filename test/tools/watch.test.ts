@@ -76,13 +76,23 @@ describe('watch_loads MCP tool', () => {
     expect(parsed.error).toBeUndefined();
     expect(parsed.result.session_id).toBe(entry.id);
     expect(parsed.result.script_id).toEqual(expect.any(String));
-    expect(parsed.result.watching).toEqual({ native: true, classes: true, tamper: true });
+    expect(parsed.result.watching).toEqual({ native: true, classes: true, tamper: true, spoof: false });
 
     // The script was loaded and registered in the session — and NOT unloaded (it keeps watching).
     const script = watchScript();
     expect(script.loadCalls).toBe(1);
     expect(script.unloadCalls).toBe(0);
     expect(entry.scripts.get(parsed.result.script_id)).toBeDefined();
+  });
+
+  it('watches native loads via the module observer, never by Interceptor-hooking dlopen (issue #19)', async () => {
+    const entry = seedScriptingSession();
+    await callJson(client, 'watch_loads', { session_id: entry.id, watch_native: true });
+    const source = watchScript().source;
+    // The safe loader-notification API, and specifically NOT a dlopen trampoline.
+    expect(source).toContain('Process.attachModuleObserver');
+    expect(source).not.toMatch(/hookNative\([^)]*dlopen/);
+    expect(source).not.toMatch(/hookNative\([^)]*android_dlopen_ext/);
   });
 
   it('forwards the watch toggles to the agent as options', async () => {
@@ -93,8 +103,29 @@ describe('watch_loads MCP tool', () => {
       watch_classes: false,
       watch_tamper: false,
     });
-    expect(parsed.result.watching).toEqual({ native: true, classes: false, tamper: false });
+    expect(parsed.result.watching).toEqual({ native: true, classes: false, tamper: false, spoof: false });
     expect(agentOptions(watchScript().source)).toMatchObject({ watchNative: true, watchClasses: false, watchTamper: false });
+  });
+
+  it('refuses spoof=true unless memoryWriteEnabled is set', async () => {
+    const entry = seedScriptingSession();
+    const parsed = await callJson(client, 'watch_loads', { session_id: entry.id, spoof: true });
+    expect(parsed.error).toBeDefined();
+    expect(parsed.error.code).toBe('MEMORY_WRITE_DISABLED');
+  });
+
+  it('forwards spoofTamper and arms the scrub hooks when memory writes are enabled', async () => {
+    initState({ ...TEST_CONFIG, memoryWriteEnabled: true });
+    const entry = seedScriptingSession();
+    const parsed = await callJson(client, 'watch_loads', { session_id: entry.id, spoof: true });
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.result.watching).toMatchObject({ spoof: true });
+    const source = watchScript().source;
+    expect(agentOptions(source)).toMatchObject({ spoofTamper: true });
+    // The shared scrub snippet and its stable fgets/fread scrub hooks are present in the agent.
+    expect(source).toContain('installEvasion');
+    expect(source).toContain("hookNative(null, 'fgets'");
+    expect(source).toContain("hookNative(null, 'fread'");
   });
 
   it('suggests driving the app and reading watch_event messages next', async () => {

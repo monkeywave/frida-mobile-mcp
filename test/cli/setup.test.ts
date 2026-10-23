@@ -58,6 +58,15 @@ describe('buildServerEntry', () => {
     expect(entry.env).toEqual({ FRIDA_DEVICE_ID: 'emulator-5554' });
   });
 
+  it('bakes in --allow-native-injection like the other write capabilities', () => {
+    const entry = buildServerEntry({ allowCustomScripts: true, allowMemoryWrite: true, allowNativeInjection: true });
+    expect(entry.args).toEqual([
+      '-y', 'frida-mobile-mcp', '--allow-custom-scripts', '--allow-memory-write', '--allow-native-injection',
+    ]);
+    // Granted independently: native injection alone, without the JS-agent capability.
+    expect(buildServerEntry({ allowNativeInjection: true }).args).toEqual(['-y', 'frida-mobile-mcp', '--allow-native-injection']);
+  });
+
   it('omits env when device is an empty string', () => {
     expect(buildServerEntry({ device: '' }).env).toBeUndefined();
   });

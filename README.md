@@ -13,7 +13,10 @@ An MCP server that gives AI agents dynamic instrumentation of Android and iOS ap
 npx frida-mobile-mcp                      # stdio MCP server (default `serve` command)
 frida-mobile-mcp doctor                   # check Node, frida-node, adb, devices, frida-server, bridge bundles
 frida-mobile-mcp setup --client cursor    # write the server into a client config (claude-code, claude-desktop, cursor, vscode, windsurf, codex)
+frida-mobile-mcp gadget --platform android --print   # generate a frida-gadget config.json + APK/IPA repackaging guidance
 ```
+
+The `gadget` command generates a [frida-gadget](https://frida.re/docs/gadget/) `config.json` (`--interaction listen` or `--interaction script`) and prints the APK/IPA repackaging steps. Embedding the gadget is the only way to instrument native detection that runs in `.init_array` / `JNI_OnLoad` **before** an attach-time script can load, and it removes the frida-server `:27042` port as a fingerprint — see `frida_help({ topic: "evasion" })`.
 
 Claude Code:
 
@@ -67,7 +70,7 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | Tool | Description |
 |------|-------------|
 | `get_status` | Connected devices, active sessions (platform, script count, last activity), hooks, traces and recent detaches/crashes. Run first and after a session is lost. |
-| `frida_help` | Topic help: overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, script_catalog, script_api, recipes. |
+| `frida_help` | Topic help: overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, evasion, script_catalog, script_api, recipes. |
 | `detect_app_technologies` | Fingerprint libraries, frameworks and security mechanisms; returns recommended script targets. |
 | `explore_app` | Spawn an app suspended, instrument, resume; returns pid, platform, modules and a filtered class list. |
 | `search_classes_and_methods` | Regex search over classes (and methods with `include_methods`) in a running app. |
@@ -116,6 +119,9 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `kill_process` | Kill a process. |
 | `detach_session` | Detach a session and unload its scripts. |
 | `list_sessions` | Sessions managed by this server. |
+| `spawn_gating` | Enable / disable / list device-wide spawn gating — hold newly spawned (incl. child/isolated) processes suspended for early instrumentation; release with `resume_process`. |
+| `child_gating` | Enable / disable child gating on a session so forked/exec'd child processes are held for instrumentation. |
+| `eternalize_script` | Pin a loaded script in the target so it survives detach (fire-and-forget: no more messages/unload) — leave a bypass/monitor running while you free the session. |
 | `enumerate_modules` | Loaded modules with name, base, end, size, path; regex `filter`. |
 | `enumerate_exports` | Exports of a module, paginated. |
 | `enumerate_imports` | Imports of a module with the providing module, paginated. |
@@ -126,6 +132,15 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `list_threads` | Threads with id, name, state, current pc as `module+0xoffset`; optional 8-frame backtraces. |
 | `hook_function` | Low-level `Interceptor` hook on a `session_id` with optional custom `on_enter`/`on_leave` bodies (custom bodies need `allowCustomScripts`). |
 | `unhook_function` | Remove a hook by ID. |
+| `frida_server_status` | Android (adb): report frida-server PIDs, device CPU ABI, matching frida release arch, and the GitHub `.xz` asset URL for the installed frida-node version. |
+| `frida_server_install` | Android (adb): push a local (decompressed) frida-server binary to the device and `chmod 755` it. |
+| `frida_server_start` | Android (adb): start frida-server daemonized (optionally via `su`) with a custom listen address/port and binary name — a non-default port/name evades `:27042`/`frida-server` scans. Enforces `allowedDevices`. |
+| `frida_server_stop` | Android (adb): signal the matching frida-server process to stop (`pkill`, optionally via `su`). |
+| `adb_shell` | Android (adb): run an arbitrary device shell command. **Disabled by default** — requires `allowAdbShell` (config) or `FRIDA_MCP_ALLOW_ADB_SHELL=1`. |
+| `adb_logcat` | Android (adb): dump the last N logcat lines (one-shot), optional `tag:priority` filters, or clear the buffer. |
+| `adb_pull` / `adb_push` | Android (adb): move files between host and device. |
+| `adb_forward` | Android (adb): add / remove / list port forwards (reach a frida-server on a non-default device port). |
+| `inject_library` | Inject a native library (.so/.dylib) from the host into a process via Frida's injector, independent of the JS engine — the parity path for a prebuilt gadget/agent or custom .so. **Disabled by default** — needs `allowNativeInjection` (config) or `FRIDA_MCP_ALLOW_NATIVE_INJECTION=1` (a capability separate from `allowCustomScripts`) and an architecture-matched library. |
 
 ### mobile_action gateway
 
@@ -145,6 +160,7 @@ The server also exposes `frida://` resources (version, devices, processes, apps,
 | `network_inspector` | Sockets, DNS, UDP and TLS SSL_read/SSL_write (plaintext bytes with `log_data`) |
 | `keychain_prefs` | iOS Keychain and Android SharedPreferences access |
 | `filesystem_monitor` | File I/O and SQLite |
+| `anti_frida_evasion` | Observe (`mode=report`, default) or neutralize (`mode=spoof`, needs `memoryWriteEnabled`) the native primitives RASP uses to detect Frida: `/proc/self/{maps,status,task}` reads, `strstr` "frida" greps, thread-name / `dlopen` probes, and iOS dyld image scans |
 
 ## Address notation and evidence envelope
 
@@ -198,6 +214,7 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
 {
   "allowCustomScripts": false,
   "memoryWriteEnabled": false,
+  "allowNativeInjection": false,
   "allowedDevices": [],
   "maxSessions": 4,
   "sessionTimeoutMinutes": 30,
@@ -213,6 +230,8 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
 | `FRIDA_DEVICE_ID` | first USB device | Device to use; same as `--device` |
 | `FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS` | unset | `1`/`true` enables `execute_script` and custom `hook_function` bodies; same as `--allow-custom-scripts` |
 | `FRIDA_MCP_MEMORY_WRITE` | unset | `1`/`true` enables `write_memory`; same as `--allow-memory-write` |
+| `FRIDA_MCP_ALLOW_NATIVE_INJECTION` | unset | `1`/`true` enables `inject_library` (native .so/.dylib injection); a capability separate from custom scripts |
+| `FRIDA_MCP_ALLOW_ADB_SHELL` | unset | `1`/`true` enables `adb_shell` (arbitrary device shell commands) |
 | `FRIDA_MCP_DEBUG` | unset | `1` enables debug logging on stderr; same as `--debug` |
 | `FRIDA_MCP_REMOTE` | unset | `host[:port]` of a frida-server added as a remote device at startup (port 27042) |
 | `FRIDA_MCP_HTTP_TOKEN` | unset | Bearer token for the HTTP transport; same as `--http-token` |
@@ -227,7 +246,8 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
 ## Security guardrails
 
 - `execute_script` and custom `hook_function` handler bodies are refused with `CUSTOM_SCRIPTS_DISABLED` unless `allowCustomScripts` is on; prebuilt scripts and typed hook tools never need it.
-- `write_memory` is refused with `MEMORY_WRITE_DISABLED` unless `memoryWriteEnabled` is on.
+- `write_memory` is refused with `MEMORY_WRITE_DISABLED` unless `memoryWriteEnabled` is on. Prebuilt scripts that write target memory (e.g. `anti_frida_evasion` with `mode=spoof`) and `watch_loads` with `spoof=true` are gated the same way.
+- `inject_library` is refused with `NATIVE_INJECTION_DISABLED` unless `allowNativeInjection` is on — a capability kept separate from `allowCustomScripts` so native code injection can be withheld even when JS agents are permitted.
 - `allowedDevices` restricts which device IDs may be used (empty = any).
 - Rate limits per minute for script loads, memory reads/scans and attach/spawn (`RATE_LIMIT_EXCEEDED`, retryable); `maxSessions` and `sessionTimeoutMinutes` cap concurrent and idle sessions.
 - Every tool call is appended to the JSONL audit log at `auditLogPath` with its `evidence_id`.

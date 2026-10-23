@@ -24,11 +24,15 @@ Registered tools: `get_status`, `frida_help`, `explore_app`,
 `get_frontmost_application`, `spawn_process`, `attach_process`,
 `resume_process`, `kill_process`, `detach_session`, `list_sessions`,
 `capture_tls` (friTap) and `analyze_native_function` (native function analysis
-that returns `module+0xoffset` addresses).
+that returns `module+0xoffset` addresses). Operational / stealth tools (Android,
+via adb): `frida_server_status`, `frida_server_install`, `frida_server_start`,
+`frida_server_stop`, `adb_shell`, `adb_logcat`, `adb_pull`, `adb_push`,
+`adb_forward`, `spawn_gating`, `child_gating`, plus the `anti_frida_evasion`
+prebuilt script and the `frida-mobile-mcp gadget` CLI command (section 8).
 
 `frida_help({ topic })` returns in-server documentation; topics are
-`overview, hooking, tracing, memory, scripts, mobile, examples, advanced,
-script_catalog`.
+`overview, hooking, tracing, memory, scripts, native, tls, mobile, examples,
+advanced, evasion, script_catalog, script_api, recipes`.
 
 ## 1. When to use frida-mobile-mcp instead of static tools
 
@@ -327,3 +331,57 @@ Errors are returned as:
 resource | provider`. Retry only when `retryable` is true (`RATE_LIMIT_EXCEEDED`,
 `RPC_TIMEOUT`, `FRIDA_TIMEOUT`); otherwise apply `remediation` or one of the
 `recovery_actions` first. See `docs/interop.md` for the full code table.
+
+## 8. Defeating RASP / anti-Frida detection
+
+The prebuilt bypasses in section 1 defeat the app's own checks (root/jailbreak,
+SSL pinning, iOS anti-debug). Modern RASP (Talsec freeRASP, Guardsquare,
+PairIP, Promon SHIELD, Appdome) additionally fingerprints **Frida itself**:
+it scans `/proc/self/maps` for `frida-agent`/`libgadget`, reads thread names
+(`gum-js-loop`, `pool-frida`), probes the `:27042` port / D-Bus handshake,
+reads `/proc/self/status` TracerPid, and on iOS walks the dyld image list for
+`FridaGadget`. Attack this in four layers (`frida_help({ topic: "evasion" })`
+has the condensed version).
+
+**Honest limitation.** Native detection in `.init_array` / `JNI_OnLoad` runs at
+`dlopen`, before any attach-time script loads — even spawned suspended. The
+attach model cannot instrument a constructor that already ran. The only full
+answer to that class is frida-gadget embedded in a repackaged app (layer 3).
+
+1. **In-process spoofing (attach model).** `run_prebuilt_script({ script_name:
+   "anti_frida_evasion", target })` in `mode=report` (default) logs every probe
+   the app makes; `mode=spoof` (needs `memoryWriteEnabled`) scrubs the Frida
+   signatures out of what it reads from `/proc/self/{maps,status,task}`, zeroes
+   TracerPid, blanks matched thread names, and rewrites iOS dyld image names.
+   `aggressive=true` also hooks the hot `read()`/`strstr()` (raw `open()+read()`
+   maps reads) at some stability cost. `watch_loads({ spoof: true })` applies
+   the same scrub scoped to the `/proc` reads it watches. In-process scrubbing
+   cannot change thread names it does not own, free `:27042`, or hide the
+   agent's own file-backed mapping — that is layers 2–4.
+
+2. **A quieter frida-server (Android).** `frida_server_start` accepts a custom
+   `name` and `port`; run it as e.g. `/data/local/tmp/fs-$RANDOM` on
+   `127.0.0.1:1337` so a `:27042` port scan and an `re.frida.server` name scan
+   both miss. Reach the non-default port with `adb_forward` +
+   `FRIDA_MCP_REMOTE=127.0.0.1:1337`. A patched/renamed build (strongR-frida,
+   hluda) also renames the server's internal threads and pipe/D-Bus strings
+   that a vanilla server leaks.
+
+3. **frida-gadget (pre-`main`, no server port).** `frida-mobile-mcp gadget`
+   (a CLI command — it needs app repackaging, so it is not a session tool)
+   writes the gadget `config.json` and prints the APK/IPA steps.
+   `gadget --interaction script --script /data/local/tmp/agent.js` runs fully
+   on-device with **no listening port at all**; `gadget --interaction listen
+   --port 1337 --on-load wait` blocks the app at launch until a client attaches
+   (`FRIDA_MCP_REMOTE=127.0.0.1:1337`). This is the fix for the `.init_array`
+   limitation above.
+
+4. **Hide the tracer at the OS level (device-side, out of band).** Use
+   **Magisk DenyList + Shamiko** (or Zygisk) to hide root/Magisk from the
+   target, defeating RASP that keys off root/Zygisk presence before it even
+   looks for Frida. Avoid the default `/data/local/tmp/frida-server` path/name,
+   and run app-scoped/non-root where the target allows it.
+
+Order: observe first (`anti_frida_evasion` report, or `watch_loads`), spoof only
+the vectors the app actually uses, escalate to the gadget if you are caught
+before `main`, and add layers 2 + 4 if maps/thread-name scans still catch you.

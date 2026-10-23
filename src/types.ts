@@ -28,6 +28,7 @@ export interface ScriptEntry {
   persistent: boolean;      // whether script stays loaded
   createdAt: number;
   nextMessageIndex?: number; // monotonic per-script counter (survives buffer trimming)
+  eternalized?: boolean;    // script.eternalize() was called: it survives detach but can no longer be messaged or unloaded
 }
 
 // Crash information as reported by frida (device.processCrashed / session.detached)
@@ -241,11 +242,19 @@ export interface ScriptTemplate {
   category: ScriptCategory;
   riskTier: 1 | 2 | 3;
   options?: Record<string, ScriptOption>;
+  /**
+   * Whether this template, given these options, writes to the target's memory and must therefore
+   * be gated on `memoryWriteEnabled`. Returns the reason (used verbatim as the refusal detail)
+   * when a write is required, or null when the invocation is observe-only. Observe-only templates
+   * omit this entirely. Keeps the "which options write memory" policy with the template that
+   * owns those options, instead of a magic option check in the run_prebuilt_script tool.
+   */
+  requiresMemoryWrite?: (options: Record<string, unknown>) => string | null;
   generate: (options: Record<string, unknown>, context?: PlatformContext) => string;
 }
 
 export interface ScriptOption {
-  type: 'string' | 'boolean' | 'number';
+  type: 'string' | 'boolean' | 'number' | 'array';
   description: string;
   default?: unknown;
   required?: boolean;
@@ -272,6 +281,18 @@ export interface DeviceInfo {
 export interface FridaMcpConfig {
   allowCustomScripts: boolean;
   memoryWriteEnabled: boolean;
+  /**
+   * Allow the `adb_shell` tool to run arbitrary shell commands on a device. DISABLED by
+   * default: it is arbitrary command execution. Env: `FRIDA_MCP_ALLOW_ADB_SHELL=0|1`.
+   */
+  allowAdbShell: boolean;
+  /**
+   * Allow the `inject_library` tool to load a native library (.so/.dylib) into a target via
+   * Frida's injector. DISABLED by default: it runs arbitrary native code in the target. Kept
+   * separate from `allowCustomScripts` (which gates JS agents) so native injection can be
+   * granted or withheld independently. Env: `FRIDA_MCP_ALLOW_NATIVE_INJECTION=0|1`.
+   */
+  allowNativeInjection: boolean;
   allowedDevices: string[];
   maxSessions: number;
   sessionTimeoutMinutes: number;

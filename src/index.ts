@@ -12,6 +12,13 @@ import { getState } from './state.js';
 import { getActiveConfig, type RuntimeConfig } from './config.js';
 import { runDoctor } from './cli/doctor.js';
 import { runSetup, CLIENT_NAMES, type ClientName } from './cli/setup.js';
+import {
+  runGadget,
+  GADGET_INTERACTIONS,
+  GADGET_PLATFORMS,
+  type GadgetInteraction,
+  type GadgetPlatform,
+} from './cli/gadget.js';
 
 interface ServeOptions {
   transport: string;
@@ -21,6 +28,7 @@ interface ServeOptions {
   device?: string;
   allowCustomScripts?: boolean;
   allowMemoryWrite?: boolean;
+  allowNativeInjection?: boolean;
   mobileMcp: boolean;
   debug?: boolean;
   listDevices?: boolean;
@@ -31,6 +39,21 @@ interface SetupCliOptions {
   device?: string;
   allowCustomScripts?: boolean;
   allowMemoryWrite?: boolean;
+  allowNativeInjection?: boolean;
+  print?: boolean;
+}
+
+interface GadgetCliOptions {
+  interaction: string;
+  platform: string;
+  address: string;
+  port?: string;
+  onPortConflict: string;
+  onLoad: string;
+  script?: string;
+  onChange: string;
+  runtime?: string;
+  out?: string;
   print?: boolean;
 }
 
@@ -51,6 +74,7 @@ program
   .option('--device <id>', 'Frida device ID to use')
   .option('--allow-custom-scripts', 'Allow execution of custom Frida scripts')
   .option('--allow-memory-write', 'Allow memory write operations')
+  .option('--allow-native-injection', 'Allow native library injection (inject_library)')
   .option('--no-mobile-mcp', 'Disable mobile-mcp integration')
   .option('--debug', 'Enable debug logging')
   .option('--list-devices', 'List Frida devices and exit')
@@ -68,8 +92,25 @@ program
   .option('--device <id>', 'Default Frida device ID (FRIDA_DEVICE_ID)')
   .option('--allow-custom-scripts', 'Pass --allow-custom-scripts to the server')
   .option('--allow-memory-write', 'Pass --allow-memory-write to the server')
+  .option('--allow-native-injection', 'Pass --allow-native-injection to the server')
   .option('--print', 'Print the configuration instead of writing it')
   .action((opts: SetupCliOptions) => runWithErrorHandling(async () => process.exit(setup(opts))));
+
+program
+  .command('gadget')
+  .description('Generate a frida-gadget config.json and print APK/IPA repackaging guidance')
+  .option('--interaction <type>', `Gadget interaction: ${GADGET_INTERACTIONS.join(', ')}`, 'listen')
+  .option('--platform <os>', `Target platform for the guidance: ${GADGET_PLATFORMS.join(', ')}`, 'android')
+  .option('--address <addr>', 'listen: bind address', '127.0.0.1')
+  .option('--port <number>', 'listen: TCP port', '27042')
+  .option('--on-port-conflict <mode>', 'listen: fail or pick-next', 'fail')
+  .option('--on-load <mode>', 'listen: resume or wait', 'wait')
+  .option('--script <path>', 'script: on-device path to the agent script the gadget runs')
+  .option('--on-change <mode>', 'script: ignore or reload', 'reload')
+  .option('--runtime <engine>', 'GumJS runtime override: qjs or v8')
+  .option('--out <path>', 'Write the config to this path instead of the platform default')
+  .option('--print', 'Print the config instead of writing it')
+  .action((opts: GadgetCliOptions) => runWithErrorHandling(async () => process.exit(gadget(opts))));
 
 function runWithErrorHandling(task: () => Promise<void>): Promise<void> {
   return task().catch((err) => {
@@ -84,6 +125,23 @@ function setup(opts: SetupCliOptions): number {
     device: opts.device,
     allowCustomScripts: opts.allowCustomScripts,
     allowMemoryWrite: opts.allowMemoryWrite,
+    allowNativeInjection: opts.allowNativeInjection,
+    print: opts.print,
+  });
+}
+
+function gadget(opts: GadgetCliOptions): number {
+  return runGadget({
+    interaction: opts.interaction as GadgetInteraction,
+    platform: opts.platform as GadgetPlatform,
+    address: opts.address,
+    port: opts.port !== undefined ? parsePort(opts.port) : undefined,
+    onPortConflict: opts.onPortConflict as 'fail' | 'pick-next',
+    onLoad: opts.onLoad as 'resume' | 'wait',
+    scriptPath: opts.script,
+    onChange: opts.onChange as 'ignore' | 'reload',
+    runtime: opts.runtime as 'qjs' | 'v8' | undefined,
+    out: opts.out,
     print: opts.print,
   });
 }
@@ -100,6 +158,7 @@ function configOverridesFrom(opts: ServeOptions): Partial<RuntimeConfig> {
   const overrides: Partial<RuntimeConfig> = {};
   if (opts.allowCustomScripts) overrides.allowCustomScripts = true;
   if (opts.allowMemoryWrite) overrides.memoryWriteEnabled = true;
+  if (opts.allowNativeInjection) overrides.allowNativeInjection = true;
   if (opts.mobileMcp === false) overrides.mobileMcp = { enabled: false } as RuntimeConfig['mobileMcp'];
   if (opts.httpToken) overrides.httpToken = opts.httpToken;
   return overrides;

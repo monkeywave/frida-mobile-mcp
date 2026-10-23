@@ -20,8 +20,8 @@ const HOSTILE_OPTIONS = {
   log_keys: false,
 };
 
-const NATIVE_HOOK_TEMPLATES = ['network_inspector', 'filesystem_monitor', 'crypto_monitor', 'keychain_prefs', 'root_jailbreak_bypass'];
-const UNCONDITIONAL_NATIVE_HOOK_TEMPLATES = ['network_inspector', 'filesystem_monitor', 'crypto_monitor'];
+const NATIVE_HOOK_TEMPLATES = ['network_inspector', 'filesystem_monitor', 'crypto_monitor', 'keychain_prefs', 'root_jailbreak_bypass', 'anti_frida_evasion'];
+const UNCONDITIONAL_NATIVE_HOOK_TEMPLATES = ['network_inspector', 'filesystem_monitor', 'crypto_monitor', 'anti_frida_evasion'];
 
 interface SentMessage {
   status?: string;
@@ -61,8 +61,8 @@ function runInSandbox(name: string, body: string, options: Record<string, unknow
 describe('Script Generation', () => {
   const registry = getScriptRegistry();
 
-  it('registry contains exactly 8 templates', () => {
-    expect(registry.listAll()).toHaveLength(8);
+  it('registry contains exactly 9 templates', () => {
+    expect(registry.listAll()).toHaveLength(9);
   });
 
   for (const template of registry.listAll()) {

@@ -7,6 +7,7 @@ import { cryptoMonitorTemplate } from './crypto-monitor.js';
 import { networkInspectorTemplate } from './network-inspector.js';
 import { keychainPrefsTemplate } from './keychain-prefs.js';
 import { filesystemMonitorTemplate } from './filesystem-monitor.js';
+import { antiFridaEvasionTemplate } from './anti-frida-evasion.js';
 
 class ScriptRegistry {
   private templates: Map<string, ScriptTemplate> = new Map();
@@ -37,6 +38,7 @@ export function getScriptRegistry(): ScriptRegistry {
     registryInstance.register(networkInspectorTemplate);
     registryInstance.register(keychainPrefsTemplate);
     registryInstance.register(filesystemMonitorTemplate);
+    registryInstance.register(antiFridaEvasionTemplate);
   }
   return registryInstance;
 }

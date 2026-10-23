@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
-import { wrapFridaError, FridaMcpError } from '../helpers/errors.js';
+import { wrapFridaError, FridaMcpError, MemoryWriteDisabledError } from '../helpers/errors.js';
 import { validateProcessTarget } from '../helpers/sanitize.js';
 import { log, audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
@@ -24,7 +24,7 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
     'run_prebuilt_script',
     {
       title: 'Run Pre-built Script',
-      description: 'Run a pre-built Frida script from the built-in library. Call without script_name to list all available scripts. Available scripts include: ssl_pinning_bypass, root_jailbreak_bypass, class_enumeration, method_hook, crypto_monitor, network_inspector, keychain_prefs, filesystem_monitor.',
+      description: 'Run a pre-built Frida script from the built-in library. Call without script_name to list all available scripts. Available scripts include: ssl_pinning_bypass, root_jailbreak_bypass, class_enumeration, method_hook, crypto_monitor, network_inspector, keychain_prefs, filesystem_monitor, anti_frida_evasion.',
       inputSchema: z.object({
         script_name: z.string().optional().describe('Script name. Omit to list all available scripts.'),
         target: z.string().optional().describe('App bundle ID, process name, or PID (required when running a script)'),
@@ -95,6 +95,14 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
             `Script "${script_name}" not found.`,
             [{ tool: 'run_prebuilt_script', reason: 'List available scripts' }]
           );
+        }
+
+        // A template declares whether its current options write target memory (e.g.
+        // anti_frida_evasion mode="spoof" scrubbing /proc reads); such runs are gated on
+        // memoryWriteEnabled just like write_memory. The template owns that policy and the reason.
+        const writeReason = template.requiresMemoryWrite?.(options ?? {});
+        if (writeReason && !state.config.memoryWriteEnabled) {
+          throw new MemoryWriteDisabledError(writeReason);
         }
 
         const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, { target, device });

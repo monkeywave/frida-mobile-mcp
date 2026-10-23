@@ -26,6 +26,8 @@ export interface RuntimeConfig extends FridaMcpConfig {
 const DEFAULT_CONFIG: RuntimeConfig = {
   allowCustomScripts: false,
   memoryWriteEnabled: false,
+  allowAdbShell: false,
+  allowNativeInjection: false,
   allowedDevices: [],
   maxSessions: 4,
   sessionTimeoutMinutes: 30,
@@ -133,6 +135,12 @@ function applyEnvOverrides(config: RuntimeConfig): RuntimeConfig {
   }
   if (isEnabledFlag(env.FRIDA_MCP_MEMORY_WRITE)) {
     config.memoryWriteEnabled = true;
+  }
+  if (isEnabledFlag(env.FRIDA_MCP_ALLOW_ADB_SHELL)) {
+    config.allowAdbShell = true;
+  }
+  if (isEnabledFlag(env.FRIDA_MCP_ALLOW_NATIVE_INJECTION)) {
+    config.allowNativeInjection = true;
   }
   config.schemaProfile = parseSchemaProfile(env.FRIDA_MCP_SCHEMA_PROFILE, config.schemaProfile);
   config.maxResponseChars = parseMaxResponseChars(env.FRIDA_MCP_MAX_RESPONSE_CHARS) ?? config.maxResponseChars;

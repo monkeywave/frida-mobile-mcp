@@ -5,13 +5,18 @@
  * through `DoctorDeps` so the checks can be unit-tested without a device. Only `runDoctor`
  * writes to stdout; everything else returns data.
  */
-import { execFile } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { areBridgesBuilt } from '../agent/bridges.js';
 import { loadConfig } from '../config.js';
+import { exec, parseAdbDevices, which, type AdbDevice, type ExecResult } from '../helpers/adb.js';
+
+// Re-exported so existing importers of these from `./doctor.js` keep working; the single
+// implementation now lives in `src/helpers/adb.ts`.
+export { exec, parseAdbDevices, which };
+export type { AdbDevice, ExecResult };
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -24,12 +29,6 @@ export interface CheckResult {
   status: CheckStatus;
   detail: string;
   required: boolean;
-}
-
-export interface ExecResult {
-  stdout: string;
-  stderr: string;
-  code: number | null;
 }
 
 export interface DoctorConfigSummary {
@@ -50,11 +49,6 @@ export interface DoctorDeps {
   configExists: (p: string) => boolean;
   loadConfig: () => DoctorConfigSummary;
   timeoutMs: number;
-}
-
-export interface AdbDevice {
-  id: string;
-  state: string;
 }
 
 /** Minimal structural view of a frida device; `typeof import('frida')` satisfies it. */
@@ -125,49 +119,6 @@ function summarizeConfig(): DoctorConfigSummary {
   };
 }
 
-/** Locate an executable on PATH without external dependencies. */
-export async function which(bin: string): Promise<string | null> {
-  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  for (const dir of dirs) {
-    for (const candidate of candidateNames(bin)) {
-      const full = path.join(dir, candidate);
-      if (isExecutableFile(full)) return full;
-    }
-  }
-  return null;
-}
-
-function candidateNames(bin: string): string[] {
-  if (process.platform !== 'win32') return [bin];
-  const extensions = (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean);
-  const hasExtension = extensions.some((ext) => bin.toLowerCase().endsWith(ext.toLowerCase()));
-  return hasExtension ? [bin] : [bin, ...extensions.map((ext) => bin + ext)];
-}
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    return statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-/** `execFile` wrapper that resolves on every outcome (never throws). */
-export function exec(cmd: string, args: string[], timeoutMs: number): Promise<ExecResult> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: timeoutMs, windowsHide: true }, (error, stdout, stderr) => {
-      const code = error ? extractExitCode(error) : 0;
-      const errorText = error && !stderr ? error.message : '';
-      resolve({ stdout: String(stdout), stderr: String(stderr) || errorText, code });
-    });
-  });
-}
-
-function extractExitCode(error: unknown): number | null {
-  const code = (error as { code?: unknown }).code;
-  return typeof code === 'number' ? code : null;
-}
-
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
@@ -198,22 +149,6 @@ export function checkNodeVersion(version: string, minimum = MIN_NODE_VERSION): C
     detail: ok ? `${version} (>= ${minimum} required)` : `${version} is too old, Node.js >= ${minimum} is required`,
     required: true,
   };
-}
-
-/** Parse `adb devices` output into `{ id, state }` entries, skipping the header line. */
-export function parseAdbDevices(stdout: string): AdbDevice[] {
-  return stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith('List of devices') && !line.startsWith('*'))
-    .map(parseAdbDeviceLine)
-    .filter((device): device is AdbDevice => device !== null);
-}
-
-function parseAdbDeviceLine(line: string): AdbDevice | null {
-  const [id, state] = line.split(/\s+/);
-  if (!id || !state) return null;
-  return { id, state };
 }
 
 /** Translate a raw frida error into an actionable hint. */

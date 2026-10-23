@@ -378,7 +378,9 @@ function nextMessageIndex(script: ScriptEntry): number {
 async function unloadScripts(entry: SessionEntry): Promise<void> {
   for (const scriptEntry of entry.scripts.values()) {
     try {
-      if (scriptEntry.script.isDestroyed) continue;
+      // Eternalized scripts are deliberately pinned in the target and must outlive the session
+      // (that is the point of eternalize_script), so never unload them here either.
+      if (scriptEntry.eternalized || scriptEntry.script.isDestroyed) continue;
       await scriptEntry.script.unload();
     } catch { /* script may already be unloaded or the process may be gone */ }
   }

@@ -172,6 +172,54 @@ describe('advanced session tools', () => {
     });
   });
 
+  describe('eternalize_script', () => {
+    /** A script entry whose underlying frida script records eternalize() calls. */
+    function seedEternalizableScript() {
+      const eternalize = vi.fn().mockResolvedValue(undefined);
+      const script = { ...fakeScript(), eternalize };
+      const entry = seedSession(getState(), [scriptEntry('s1', script as any)]);
+      return { entry, script, eternalize };
+    }
+
+    it('eternalizes the script and marks the entry', async () => {
+      const { entry, eternalize } = seedEternalizableScript();
+
+      const body = await callJson(harness.client, 'eternalize_script', { session_id: entry.id, script_id: 's1' });
+
+      expect(eternalize).toHaveBeenCalledTimes(1);
+      expect(body.result.status).toBe('eternalized');
+      const scriptEntryAfter = getState().getSession(entry.id)!.scripts.get('s1')!;
+      expect(scriptEntryAfter.eternalized).toBe(true);
+      expect(scriptEntryAfter.persistent).toBe(true);
+    });
+
+    it('reports SESSION_NOT_FOUND for an unknown session', async () => {
+      const body = await callJson(harness.client, 'eternalize_script', { session_id: 'nope', script_id: 's1' });
+      expect(body.error.code).toBe('SESSION_NOT_FOUND');
+    });
+
+    it('reports SCRIPT_NOT_FOUND for an unknown script', async () => {
+      const entry = seedSession(getState(), []);
+      const body = await callJson(harness.client, 'eternalize_script', { session_id: entry.id, script_id: 'ghost' });
+      expect(body.error.code).toBe('SCRIPT_NOT_FOUND');
+    });
+
+    it('removeSession (the reaper/cleanup path) does NOT unload eternalized scripts', async () => {
+      const state = getState();
+      const pinned = fakeScript();
+      const normal = fakeScript();
+      const pinnedEntry = scriptEntry('pinned', pinned);
+      pinnedEntry.eternalized = true;
+      const entry = seedSession(state, [pinnedEntry, scriptEntry('normal', normal)]);
+
+      await state.removeSession(entry.id);
+
+      expect(pinned.unloadCalls).toBe(0); // pinned script survives — the whole point of eternalize
+      expect(normal.unloadCalls).toBe(1);
+      expect(state.getSession(entry.id)).toBeUndefined();
+    });
+  });
+
   describe('list_sessions', () => {
     it('summarises the active sessions', async () => {
       const state = getState();

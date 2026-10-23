@@ -37,7 +37,8 @@
       "env": {
         "FRIDA_DEVICE_ID": "${user_config.device_id}",
         "FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS": "${user_config.allow_custom_scripts}",
-        "FRIDA_MCP_MEMORY_WRITE": "${user_config.allow_memory_write}"
+        "FRIDA_MCP_MEMORY_WRITE": "${user_config.allow_memory_write}",
+        "FRIDA_MCP_ALLOW_NATIVE_INJECTION": "${user_config.allow_native_injection}"
       }
     }
   },
@@ -60,6 +61,13 @@
       "type": "boolean",
       "title": "Allow memory writes",
       "description": "Enable the write_memory tool, which patches process memory on the target device.",
+      "required": false,
+      "default": false
+    },
+    "allow_native_injection": {
+      "type": "boolean",
+      "title": "Allow native library injection",
+      "description": "Enable the inject_library tool, which loads a native .so/.dylib into the target via Frida's injector (arbitrary native code). A capability separate from custom Frida scripts.",
       "required": false,
       "default": false
     }
@@ -226,6 +234,18 @@
       "description": "List all active Frida sessions managed by this server."
     },
     {
+      "name": "spawn_gating",
+      "description": "Enable, disable, or list device-wide spawn gating to hold newly spawned (incl. child/isolated) processes suspended for early instrumentation"
+    },
+    {
+      "name": "child_gating",
+      "description": "Enable or disable child gating on a session so forked/exec'd child processes are held for instrumentation"
+    },
+    {
+      "name": "eternalize_script",
+      "description": "Pin a loaded script in the target so it survives session detach (fire-and-forget: no more messages or unload afterwards)"
+    },
+    {
       "name": "enumerate_modules",
       "description": "List loaded modules (shared libraries) in the target process with name, base, end (base+size), size and path"
     },
@@ -264,6 +284,46 @@
     {
       "name": "list_threads",
       "description": "List the threads of the target process (id, name, state, current pc as module+0xoffset)"
+    },
+    {
+      "name": "frida_server_status",
+      "description": "Report whether frida-server is running on an Android device (via adb): PIDs, device CPU ABI, matching frida release arch, and the GitHub .xz asset URL to download for the installed frida-node version"
+    },
+    {
+      "name": "frida_server_install",
+      "description": "Push a local frida-server binary to an Android device and chmod it executable (adb push + chmod 755)"
+    },
+    {
+      "name": "frida_server_start",
+      "description": "Start frida-server detached on an Android device (daemonized, optionally via su) with a custom listen address/port/binary name, then confirm it came up"
+    },
+    {
+      "name": "frida_server_stop",
+      "description": "Stop frida-server on an Android device by signalling the matching process (adb shell pkill, optionally via su)"
+    },
+    {
+      "name": "adb_shell",
+      "description": "Run an arbitrary shell command on an Android device via adb shell; disabled by default, requires allowAdbShell"
+    },
+    {
+      "name": "adb_logcat",
+      "description": "Dump the last N lines of the Android logcat (one-shot), optionally filtered, or clear the buffer"
+    },
+    {
+      "name": "adb_pull",
+      "description": "Pull a file from an Android device to the host (adb pull)"
+    },
+    {
+      "name": "adb_push",
+      "description": "Push a file from the host to an Android device (adb push)"
+    },
+    {
+      "name": "adb_forward",
+      "description": "Manage adb port forwards (add, remove, or list) to reach a frida-server on a non-default device port"
+    },
+    {
+      "name": "inject_library",
+      "description": "Inject a native library (.so/.dylib) from the host into a target process via Frida's injector, independent of the JS engine (disabled by default; requires allowNativeInjection and an architecture-matched library)"
     },
     {
       "name": "search_recipes",

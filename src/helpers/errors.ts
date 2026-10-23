@@ -22,6 +22,8 @@ const ERROR_CLASSIFICATION: Record<string, { category: ErrorCategory; retryable:
   CLASS_NOT_LOADED: { category: 'request', retryable: true },
   CUSTOM_SCRIPTS_DISABLED: { category: 'authorization', retryable: false },
   MEMORY_WRITE_DISABLED: { category: 'authorization', retryable: false },
+  ADB_SHELL_DISABLED: { category: 'authorization', retryable: false },
+  NATIVE_INJECTION_DISABLED: { category: 'authorization', retryable: false },
   DEVICE_NOT_ALLOWED: { category: 'authorization', retryable: false },
   DEVICE_NOT_FOUND: { category: 'capability', retryable: false },
   MOBILE_MCP_UNAVAILABLE: { category: 'capability', retryable: false },
@@ -149,10 +151,10 @@ export class ScriptError extends FridaMcpError {
 }
 
 export class CustomScriptDisabledError extends FridaMcpError {
-  constructor() {
+  constructor(detail?: string) {
     super(
       'CUSTOM_SCRIPTS_DISABLED',
-      'Custom script execution is disabled. Use pre-built scripts or enable allowCustomScripts in config.',
+      detail ?? 'Custom script execution is disabled. Use pre-built scripts or enable allowCustomScripts in config.',
       [
         { tool: 'run_prebuilt_script', reason: 'Use a pre-built script instead' },
         { tool: 'frida_help', args: { topic: 'scripts' }, reason: 'See available pre-built scripts' },
@@ -171,10 +173,10 @@ export class CustomScriptDisabledError extends FridaMcpError {
 }
 
 export class MemoryWriteDisabledError extends FridaMcpError {
-  constructor() {
+  constructor(detail?: string) {
     super(
       'MEMORY_WRITE_DISABLED',
-      'Memory write operations are disabled by default for safety.',
+      detail ?? 'Memory write operations are disabled by default for safety.',
       [
         { tool: 'read_memory', reason: 'Read memory instead (always allowed)' },
         {
@@ -182,6 +184,47 @@ export class MemoryWriteDisabledError extends FridaMcpError {
           message: 'Set memoryWriteEnabled: true in ~/.config/frida-mobile-mcp/config.json',
         },
       ]
+    );
+  }
+}
+
+export class AdbShellDisabledError extends FridaMcpError {
+  constructor(detail?: string) {
+    super(
+      'ADB_SHELL_DISABLED',
+      detail ?? 'adb_shell runs arbitrary device commands and is disabled by default.',
+      [
+        {
+          action: 'user_intervention',
+          message: 'Set allowAdbShell: true in ~/.config/frida-mobile-mcp/config.json (or FRIDA_MCP_ALLOW_ADB_SHELL=1)',
+        },
+      ],
+      {},
+      {
+        category: 'authorization',
+        remediation: 'Enable allowAdbShell (config or FRIDA_MCP_ALLOW_ADB_SHELL=1) to run raw device shell commands, then retry. Prefer the typed adb tools (adb_logcat/pull/push/forward) when they cover the task.',
+      }
+    );
+  }
+}
+
+export class NativeInjectionDisabledError extends FridaMcpError {
+  constructor(detail?: string) {
+    super(
+      'NATIVE_INJECTION_DISABLED',
+      detail ?? 'Native library injection is disabled by default: it runs arbitrary native code in the target.',
+      [
+        { tool: 'run_prebuilt_script', reason: 'Prefer a built-in script when it covers the task' },
+        {
+          action: 'user_intervention',
+          message: 'Set allowNativeInjection: true in ~/.config/frida-mobile-mcp/config.json (or FRIDA_MCP_ALLOW_NATIVE_INJECTION=1)',
+        },
+      ],
+      {},
+      {
+        category: 'authorization',
+        remediation: 'Enable allowNativeInjection (config or FRIDA_MCP_ALLOW_NATIVE_INJECTION=1) to let inject_library load a native .so/.dylib into the target, then retry. It is a separate capability from allowCustomScripts.',
+      }
     );
   }
 }

@@ -63,6 +63,16 @@ describe('frida_help tool', () => {
     }
   });
 
+  it('defines the evasion topic covering all four anti-RASP layers', () => {
+    expect(helpFileContent).toContain('  evasion:');
+    expect(helpFileContent).toContain('anti_frida_evasion');
+    expect(helpFileContent).toContain('frida_server_start');
+    expect(helpFileContent).toContain('gadget');
+    expect(helpFileContent).toContain('DenyList');
+    // The honest pre-main limitation must be stated.
+    expect(helpFileContent).toContain('.init_array');
+  });
+
   it('defines the native and tls topics', () => {
     expect(helpFileContent).toContain('  native:');
     expect(helpFileContent).toContain('  tls:');

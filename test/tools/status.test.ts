@@ -7,7 +7,7 @@ import type { SessionEntry, DetachRecord } from '../../src/types.js';
 describe('get_status tool structure', () => {
   it('script registry is available for status reporting', () => {
     const registry = getScriptRegistry();
-    expect(registry.listAll().length).toBe(8);
+    expect(registry.listAll().length).toBe(9);
   });
 });
 

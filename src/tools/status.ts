@@ -182,6 +182,7 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
             config: {
               custom_scripts_enabled: state.config.allowCustomScripts,
               memory_write_enabled: state.config.memoryWriteEnabled,
+              native_injection_enabled: state.config.allowNativeInjection,
               mobile_mcp_enabled: state.config.mobileMcp.enabled,
               max_sessions: state.config.maxSessions,
             },

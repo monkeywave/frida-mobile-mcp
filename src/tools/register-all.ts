@@ -37,6 +37,9 @@ import { registerAdvancedSessionTools } from './advanced/session.js';
 import { registerAdvancedModuleTools } from './advanced/modules.js';
 import { registerAdvancedInterceptTools } from './advanced/intercept.js';
 import { registerNativeAnalysisTools } from './advanced/native.js';
+import { registerFridaServerTools } from './advanced/server.js';
+import { registerAdbTools } from './advanced/adb.js';
+import { registerInjectTools } from './advanced/inject.js';
 import { registerResources } from '../resources.js';
 import { registerPrompts } from '../prompts.js';
 
@@ -86,6 +89,9 @@ export function registerTier2Tools(server: McpServer, deviceManager: DeviceManag
   registerAdvancedModuleTools(server);
   registerAdvancedInterceptTools(server);
   registerNativeAnalysisTools(server);
+  registerFridaServerTools(server);
+  registerAdbTools(server);
+  registerInjectTools(server, deviceManager);
 }
 
 export function registerAllTools(server: McpServer, deviceManager: DeviceManager, options: RegisterAllOptions = {}): void {
