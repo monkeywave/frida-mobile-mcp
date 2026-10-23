@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.5.1...v0.6.0) (2026-10-23)
+
+
+### CI/CD
+
+* wait for npm propagation before MCP-registry publish ([e21a3fc](https://github.com/monkeywave/frida-mobile-mcp/commit/e21a3fc13968c8c1f62577ae5833280f879b6b03))
+
+
+### Miscellaneous
+
+* release 0.6.0 ([4b26a08](https://github.com/monkeywave/frida-mobile-mcp/commit/4b26a089eb579e4dfd5d8a4952c933a3041e1024))
+
 ## [0.5.1](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.5.0...v0.5.1) (2026-10-22)
 
 
