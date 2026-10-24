@@ -12,6 +12,7 @@ script_archive/
 coverage/
 .vitest/
 ./mcp-publisher
+package-lock.json
 
 # local announcement drafts, never published
 docs/announcements/
