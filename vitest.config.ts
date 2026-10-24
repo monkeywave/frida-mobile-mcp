@@ -7,6 +7,8 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     globals: false,
     testTimeout: 10000,
+    // Unit tests must not persist evidence under the real ~/.config; evidence tests use a tmp root.
+    env: { FRIDA_MCP_EVIDENCE: '0' },
     coverage: {
       provider: 'v8',
       include: ['src/**'],

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { encode as encodeToon } from '@toon-format/toon';
-import type { ToolResult, SuggestedAction, ErrorResponse, EvidenceMeta } from '../types.js';
+import type { ToolResult, SuggestedAction, ErrorResponse, EvidenceMeta, EvidenceCoverage } from '../types.js';
 import { getState } from '../state.js';
 import { FridaMcpError } from './errors.js';
 import { getCharacterLimit, ResponseFormat } from '../constants.js';
@@ -44,11 +44,15 @@ export function formatToolResponse(
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
+  _meta?: Record<string, unknown>;
 } {
   if ('error' in result) {
+    // `_meta.error` carries the structured error body so handler decorators (the evidence
+    // store) can persist it without parsing the rendered text.
     return {
       content: [{ type: 'text', text: renderText(result, format) }],
       isError: true,
+      _meta: { evidence_id: result.error.evidence_id, error: result.error },
     };
   }
 
@@ -61,6 +65,7 @@ export function formatToolResponse(
   return {
     content: [{ type: 'text', text }],
     structuredContent: { ...result } as Record<string, unknown>,
+    _meta: { evidence_id: result.evidence_id },
   };
 }
 
@@ -143,7 +148,7 @@ function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: nu
         `Result truncated to fit the ${limit}-char response limit: showing ${parts.join(', ')}. ` +
           `Request the rest with pagination (limit/offset/since) or read the full structuredContent.`,
       );
-      clone.coverage = { status: 'unknown', note: 'truncated to fit response limit' };
+      clone.coverage = truncatedCoverage(result.coverage);
     }
     text = renderText(clone, format);
     if (text.length <= limit) return text;
@@ -157,9 +162,33 @@ function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: nu
       truncated: true,
       note: 'Result exceeds the response character limit. Read structuredContent for the full data, or narrow the query / use pagination.',
     },
-    coverage: { status: 'unknown', note: 'truncated to fit response limit' },
+    coverage: truncatedCoverage(result.coverage),
   };
   return renderText(minimal, format);
+}
+
+/**
+ * Coverage after response-size trimming: keeps scope/next_offset, flags `truncated`, and
+ * downgrades `complete` to `partial` (the data exists, just not in the text). Anything else
+ * becomes `unknown`, as before.
+ */
+function truncatedCoverage(original: ToolResult['coverage']): NonNullable<ToolResult['coverage']> {
+  const status = original?.status === 'complete' || original?.status === 'partial' ? 'partial' : 'unknown';
+  return { ...original, status, note: 'truncated to fit response limit', truncated: true };
+}
+
+/**
+ * Coverage of one page/limited listing of `scope`: `partial` + `truncated` when the caller
+ * dropped items (page limit, result cap, eviction), else `complete`. `next_offset` is emitted
+ * whenever given (pass the cursor/offset the caller can continue from).
+ */
+export function pagedCoverage(scope: string, truncated: boolean, nextOffset?: number): EvidenceCoverage {
+  return {
+    status: truncated ? 'partial' : 'complete',
+    scope,
+    ...(nextOffset !== undefined ? { next_offset: nextOffset } : {}),
+    ...(truncated ? { truncated: true } : {}),
+  };
 }
 
 function renderText(data: ToolResult | ErrorResponse, format: ResponseFormat): string {
@@ -177,7 +206,7 @@ function renderText(data: ToolResult | ErrorResponse, format: ResponseFormat): s
 // Markdown formatters
 // ---------------------------------------------------------------------------
 
-function formatErrorAsMarkdown(err: ErrorResponse): string {
+export function formatErrorAsMarkdown(err: ErrorResponse): string {
   const lines: string[] = [
     `**Error**: ${err.error.code} (${err.error.category}${err.error.retryable ? ', retryable' : ''})`,
     '',
@@ -185,6 +214,9 @@ function formatErrorAsMarkdown(err: ErrorResponse): string {
   ];
   if (err.error.remediation) {
     lines.push('', `**Remediation**: ${err.error.remediation}`);
+  }
+  if (err.error.details?.partial_observation !== undefined) {
+    lines.push('', '**Partial observation** (collected before the failure):', '```json', JSON.stringify(err.error.details.partial_observation, null, 2), '```');
   }
   if (err.error.recovery_actions?.length) {
     lines.push('', '**Recovery options:**');
@@ -196,7 +228,7 @@ function formatErrorAsMarkdown(err: ErrorResponse): string {
   return lines.join('\n');
 }
 
-function resultToMarkdown(toolResult: ToolResult): string {
+export function resultToMarkdown(toolResult: ToolResult): string {
   const { result, session_context, suggested_next, limitations, coverage, evidence_id } = toolResult;
   const lines: string[] = [];
 
@@ -209,6 +241,8 @@ function resultToMarkdown(toolResult: ToolResult): string {
   const evidenceParts: string[] = [];
   if (evidence_id) evidenceParts.push(`evidence: ${evidence_id}`);
   if (coverage) evidenceParts.push(`coverage: ${coverage.status}${coverage.note ? ` (${coverage.note})` : ''}`);
+  if (coverage?.scope) evidenceParts.push(`scope: ${coverage.scope}`);
+  if (coverage?.next_offset !== undefined) evidenceParts.push(`next_offset: ${coverage.next_offset}`);
   if (evidenceParts.length > 0) lines.push('', `_${evidenceParts.join(' | ')}_`);
 
   if (session_context) {

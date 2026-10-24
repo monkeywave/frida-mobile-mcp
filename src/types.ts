@@ -28,7 +28,10 @@ export interface ScriptEntry {
   persistent: boolean;      // whether script stays loaded
   createdAt: number;
   nextMessageIndex?: number; // monotonic per-script counter (survives buffer trimming)
+  /** Global seq of the newest message evicted by maxMessageBuffer (absent = none evicted); a reader with a cursor below it lost messages. */
+  lastEvictedSeq?: number;
   eternalized?: boolean;    // script.eternalize() was called: it survives detach but can no longer be messaged or unloaded
+  sourceSha256?: string;    // full 64-hex SHA-256 provenance of the script source (see sha256Hex)
 }
 
 // Crash information as reported by frida (device.processCrashed / session.detached)
@@ -170,9 +173,21 @@ export interface ToolResult<T = unknown> {
   raw_result?: unknown;
 }
 
+/**
+ * Coverage of an observation (REA convention `coverage { scope, status, next_offset }`).
+ * `complete`: everything in `scope` was returned. `partial`: a known subset was returned
+ * (page limit, buffer eviction, response trimming); continue from `next_offset`.
+ * `unknown`: the tool cannot tell.
+ */
 export interface EvidenceCoverage {
-  status: 'complete' | 'unknown';
+  status: 'complete' | 'partial' | 'unknown';
   note?: string;
+  /** What was scanned, e.g. `module libfoo.so exports` or `session:<id>`. */
+  scope?: string;
+  /** Offset / cursor to pass back (offset, since ...) to continue where this result stopped. */
+  next_offset?: number;
+  /** True when items were dropped (page limit, buffer eviction or response-size trimming). */
+  truncated?: boolean;
 }
 
 /** Options accepted by buildResult's third argument. */
@@ -221,7 +236,19 @@ export interface ErrorResponse {
     remediation?: string;
     recovery_actions: RecoveryAction[];
     context?: Record<string, unknown>;
+    /**
+     * Extra structured detail (REA convention). `partial_observation` carries whatever was
+     * observed before the failure (messages, invocations, steps) so the work is not lost.
+     */
+    details?: ErrorDetails;
+    /** Id of the persisted evidence record for this error (see `get_evidence`); minted by `toErrorResponse()`. */
+    evidence_id: string;
   };
+}
+
+export interface ErrorDetails {
+  partial_observation?: unknown;
+  [key: string]: unknown;
 }
 
 export interface RecoveryAction {
@@ -306,6 +333,21 @@ export interface FridaMcpConfig {
    * (`FRIDA_MCP_RUNTIME=v8`); QuickJS cannot snapshot. Env: `FRIDA_MCP_SNAPSHOTS=0|1`.
    */
   snapshots?: boolean;
+  /**
+   * Evidence store: every tool result is persisted under `path` (default
+   * `~/.config/frida-mobile-mcp/evidence`) as `YYYY-MM-DD/<evidence_id>.json` (mode 0600) and
+   * indexed in `index.jsonl`. ON by default. Env: `FRIDA_MCP_EVIDENCE=0|1`,
+   * `FRIDA_MCP_EVIDENCE_PATH`, `FRIDA_MCP_EVIDENCE_MAX_MB`.
+   */
+  evidence?: EvidenceStoreConfig;
+}
+
+export interface EvidenceStoreConfig {
+  enabled?: boolean;
+  path?: string;
+  maxMb?: number;
+  maxEntries?: number;
+  maxEntryKb?: number;
 }
 
 export interface MobileMcpConfig {

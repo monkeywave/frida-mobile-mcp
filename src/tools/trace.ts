@@ -6,10 +6,11 @@ import { getState } from '../state.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
-import { log, audit } from '../helpers/logger.js';
+import { log } from '../helpers/logger.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
-import { createAgentScript } from '../agent/script-factory.js';
+import { createAgentScript, composeAgentSource, type AgentScriptOptions } from '../agent/script-factory.js';
+import { sha256Hex } from '../helpers/sanitize.js';
 import {
   resolveInstrumentationTarget,
   interceptorOptionsSchema,
@@ -45,7 +46,6 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
       },
     },
     async ({ target, session_id, method, device, duration_seconds, log_args, log_retval, interceptor_options, response_format }) => {
-      const startTime = Date.now();
       try {
         const state = getState();
         const duration = duration_seconds ?? 10;
@@ -71,7 +71,7 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
           interceptor_options
         );
 
-        const script = await createAgentScript(sessionEntry.session, {
+        const agentOptions: AgentScriptOptions = {
           sessionEntry: sessionEntry,
           source: generateTraceScript(traceType),
           platform: sessionEntry.platform,
@@ -80,7 +80,11 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
           options: { ...traceOptions, platform: sessionEntry.platform },
           // Native traces never touch Java/ObjC; skip the bridge payload for them.
           bridges: traceType === 'native' ? [] : undefined,
-        });
+        };
+        // Provenance: digest of the full composed source (preamble with options + bridges + body).
+        const composed = composeAgentSource(agentOptions);
+        const sourceSha256 = sha256Hex(composed.source);
+        const script = await createAgentScript(sessionEntry.session, agentOptions, composed);
         const scriptId = state.generateId();
         const traceId = state.generateId();
 
@@ -93,6 +97,7 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
           name: `trace:${method}`,
           persistent: false,
           createdAt: Date.now(),
+          sourceSha256,
         };
         sessionEntry.scripts.set(scriptId, scriptEntry);
 
@@ -121,19 +126,20 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
         log('info', `Tracing ${method} for ${duration}s...`);
         await new Promise((resolve) => setTimeout(resolve, duration * 1000));
 
-        // Unload script and collect results
-        await script.unload();
-        sessionEntry.scripts.delete(scriptId);
-        state.traces.delete(traceId);
-
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: sessionEntry.id,
-          tool: 'trace_method',
-          params: { target, session_id, method, duration_seconds, interceptor_options },
-          status: 'success',
-          durationMs: Date.now() - startTime,
-        });
+        // Unload script and collect results. If the unload fails (session lost, agent crash)
+        // keep what was already observed in the error's details.partial_observation.
+        try {
+          await script.unload();
+        } catch (unloadErr) {
+          throw wrapFridaError(unloadErr).withPartialObservation({
+            invocations_count: invocations.length,
+            invocations: invocations.slice(0, 100),
+          });
+        } finally {
+          // Drop the trace/script entries even when the unload failed, so no ghost entries remain.
+          sessionEntry.scripts.delete(scriptId);
+          state.traces.delete(traceId);
+        }
 
         return formatToolResponse(
           buildResult(
@@ -141,6 +147,7 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
               trace_id: traceId,
               session_id: sessionEntry.id,
               script_id: scriptId,
+              source_sha256: sourceSha256,
               method,
               duration_seconds: duration,
               interceptor_options: traceOptions.interceptorOptions ?? null,

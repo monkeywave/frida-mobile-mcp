@@ -10,8 +10,8 @@ notation contract, the evidence and error envelope, the friTap-backed
 
 ## 1. Three-server client configuration
 
-An MCP client `mcpServers` map with all three servers. ReVa listens on
-streamable HTTP; ida-pro-mcp and frida-mobile-mcp are stdio servers.
+An MCP client `mcpServers` map with all three servers, plus REA. ReVa listens on
+streamable HTTP; ida-pro-mcp, REA and frida-mobile-mcp are stdio servers.
 
 ```json
 {
@@ -23,6 +23,10 @@ streamable HTTP; ida-pro-mcp and frida-mobile-mcp are stdio servers.
     "ida-pro-mcp": {
       "command": "ida-pro-mcp",
       "args": []
+    },
+    "rea": {
+      "command": "npx",
+      "args": ["-y", "rea-agents@latest", "mcp"]
     },
     "frida-mobile-mcp": {
       "command": "npx",
@@ -50,6 +54,11 @@ Notes:
 - ida-pro-mcp may also be launched as `uvx ida-pro-mcp` or through its
   installer-generated wrapper; check that project's README for the exact
   command and for the IDA plugin side that must be running.
+- REA (npm `rea-agents`) can also be added with
+  `claude mcp add rea -- npx -y rea-agents@latest mcp`. Next to REA, trim this
+  server's catalog with `FRIDA_MCP_TOOL_PROFILE=core`,
+  `FRIDA_MCP_TOOLS_EXCLUDE=adb_*,frida_server_*` and
+  `FRIDA_MCP_SCHEMA_PROFILE=compact`; see [rea.md](rea.md).
 - `FRIDA_DEVICE_ID` preselects the Frida device so no tool has to pass
   `device`. Other useful env vars: `FRIDA_MCP_DEBUG=1`,
   `FRIDA_MCP_RUNTIME=v8|qjs`, `FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS=1`,
@@ -145,10 +154,22 @@ Every successful tool call returns the same envelope, both as text content
 | `result`          | tool specific                                        | The payload |
 | `evidence_id`     | `string` (UUID per tool call)                        | Stable reference for reports and for the audit log at `~/.config/frida-mobile-mcp/audit.jsonl` |
 | `limitations`     | `string[]`                                           | What the tool could not do (truncation, missing bridge, partial enumeration) |
-| `coverage`        | `{ status: 'complete' \| 'unknown', note?: string }` | Whether the result is exhaustive for the question asked |
+| `coverage`        | `{ status: 'complete' \| 'partial' \| 'unknown', note?: string }` | Whether the result is exhaustive for the question asked |
+| `coverage.scope` / `coverage.next_offset` / `coverage.truncated` | optional `string` / `number` / `boolean` | What was scanned, the cursor to continue a partial result, and whether items were dropped (limit, eviction, response trimming); REA's top-level `truncated` maps to `coverage.truncated` |
 | `raw_result`      | optional                                             | Untransformed provider output when the tool normalised it |
 | `session_context` | object                                               | Current device, platform, active sessions/hooks/scripts |
 | `suggested_next`  | `{ tool, args?, reason }[]`                          | Advisory follow-up calls |
+| `_meta.evidence_id` | `string` (same UUID; on errors also `error.evidence_id`) | Protocol-level copy of the id, present on every response including errors |
+| `_meta.provenance` | object, target-derived tools only                   | Marks the result as derived from the instrumented target (untrusted data); same object as REA: `{ untrusted_content: true, source: "analysis_target" }` |
+| `_meta.effects`   | object on every tool definition (`tools/list`)       | Side-effect flags `executesForeignCode`, `mutatesTarget`, `launchesProcess`, `accessesNetwork`, `writesFilesystem`, `mutatesDevice`, `idempotent` (REA's names) plus `targetDerived` |
+| `error.details.partial_observation` | optional, errors only               | What was observed before the failure (REA `details.partial_observation`) |
+| retrieval         | tools and resources                                  | `get_evidence({ evidence_id })`, `export_evidence_bundle` (JSON or Markdown, inline or `out_path`), `frida://evidence` and `frida://evidence/{id}` |
+
+Every response, errors included, is persisted to the evidence store
+(`~/.config/frida-mobile-mcp/evidence` by default, `FRIDA_MCP_EVIDENCE=0`
+disables it) and can be re-read by its `evidence_id` with `get_evidence`,
+exported with `export_evidence_bundle`, or read as the
+`frida://evidence/{id}` resource (`frida://evidence` lists the latest 100).
 
 Errors are returned with `isError: true` and this shape:
 
@@ -168,14 +189,20 @@ Errors are returned with `isError: true` and this shape:
 
 Code to category mapping:
 
-| Code                                                                 | Category        | Retryable |
-|----------------------------------------------------------------------|-----------------|-----------|
-| `RATE_LIMIT_EXCEEDED`                                                | `resource`      | yes       |
-| `CUSTOM_SCRIPTS_DISABLED`, `MEMORY_WRITE_DISABLED`                   | `authorization` | no        |
-| `DEVICE_NOT_FOUND`, `MOBILE_MCP_UNAVAILABLE`, `FRITAP_AGENT_UNAVAILABLE` | `capability` | no        |
-| `RPC_TIMEOUT`, `FRIDA_TIMEOUT`                                       | `timeout`       | yes       |
-| `SESSION_NOT_FOUND`, `INVALID_ARGUMENT`, `SCRIPT_NOT_FOUND`, `PROCESS_NOT_FOUND` | `request` | no |
-| `FRIDA_ERROR`, `SCRIPT_ERROR`, `SESSION_LOST`                        | `provider`      | no        |
+| Code                                                                 | Category        | Retryable | REA nearest code |
+|----------------------------------------------------------------------|-----------------|-----------|------------------|
+| `RATE_LIMIT_EXCEEDED`                                                | `resource`      | yes       | `resource_constraint` |
+| `CUSTOM_SCRIPTS_DISABLED`, `MEMORY_WRITE_DISABLED`                   | `authorization` | no        | `capability_unavailable` |
+| `DEVICE_NOT_FOUND`, `MOBILE_MCP_UNAVAILABLE`, `FRITAP_AGENT_UNAVAILABLE` | `capability` | no        | `capability_unavailable` |
+| `RPC_TIMEOUT`, `FRIDA_TIMEOUT`                                       | `timeout`       | yes       | `provider_timeout` |
+| `SESSION_NOT_FOUND`, `INVALID_ARGUMENT`, `SCRIPT_NOT_FOUND`, `PROCESS_NOT_FOUND` | `request` | no | `invalid_request` (`target_required` for `SESSION_NOT_FOUND` / `PROCESS_NOT_FOUND`) |
+| `FRIDA_ERROR`, `SCRIPT_ERROR`, `SESSION_LOST`                        | `provider`      | no        | `unavailable` |
+
+The full code list (including `ADB_SHELL_DISABLED`, `NATIVE_INJECTION_DISABLED`,
+`CLASS_NOT_LOADED`, `EVIDENCE_NOT_FOUND`, `SESSION_LIMIT_REACHED`) and its REA
+mapping are in [rea.md section 6](rea.md#6-evidence-across-both-servers). REA's
+`evidence_integrity_mismatch`, `unreadable_output` and `cancelled` have no
+counterpart here.
 
 A client or orchestrating agent should retry only `retryable` errors, apply
 `remediation` for `authorization` and `capability` errors (these need a config
@@ -250,6 +277,10 @@ Worked example: correlating plaintext with a statically found wrapper.
 ## 5. Static -> dynamic -> static walkthrough
 
 Goal: understand how `com.example.app` signs API requests.
+
+For the REA-specific version (artifact identity with `get_app_info`, REA
+`inspect_android_method`, hook by signature, evidence bundles from both
+servers) see [rea.md section 7](rea.md#7-walkthrough-apk---static---hook---report).
 
 1. Static (REA): `inspect_android_package` on the APK lists native libraries
    (`libfoo.so`) and the Java class `com.example.net.Api` with a `sign`

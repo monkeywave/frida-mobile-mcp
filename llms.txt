@@ -1,12 +1,13 @@
 # frida-mobile-mcp
 
-> MCP server for dynamic analysis of Android and iOS apps with Frida 17. 40 tools (explore, hook, trace, execute/validate scripts, SSL pinning bypass, friTap TLS capture, memory, native analysis, device/process/session primitives, mobile-mcp UI gateway), 8 prebuilt scripts, shared `module+0xoffset` address notation and an evidence envelope on every result. npm package `frida-mobile-mcp`, Node >= 22.12, MIT.
+> MCP server for dynamic analysis of Android and iOS apps with Frida 17. 71 tools (explore, hook, trace, execute/validate scripts, SSL pinning bypass, friTap TLS capture, memory, native analysis, device/process/session primitives, mobile-mcp UI gateway), 9 prebuilt scripts, shared `module+0xoffset` address notation and an evidence envelope on every result. npm package `frida-mobile-mcp`, Node >= 22.12, MIT.
 
 ## Start here
 
 - [README](README.md): quick start, requirements (frida-server 17.x), tool tables, configuration, security guardrails, troubleshooting.
 - [Client setup](docs/clients.md): Claude Desktop/Code, Cursor, VS Code, Windsurf, Codex, `setup`/`doctor` commands, HTTP mode, remote frida-server, version matching, environment variables.
 - [Interoperability](docs/interop.md): address notation contract, evidence/error envelope and error codes, `capture_tls` details, static -> dynamic -> static walkthrough with ReVa/IDA/REA.
+- [Working with REA](docs/rea.md): routing rules between REA and this server, installing both, context budget (`FRIDA_MCP_TOOL_PROFILE=core`), evidence field and error-code mapping, APK -> static -> hook -> report walkthrough.
 - [Agent skill](skills/mobile-dynamic-analysis/SKILL.md): when to use runtime analysis, recommended tool order, guardrail flags, troubleshooting.
 
 ## For contributors

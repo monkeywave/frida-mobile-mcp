@@ -5,8 +5,9 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
-import { audit } from '../helpers/logger.js';
 import { triggerAndCollect } from '../helpers/trigger-and-collect.js';
+import { collectDelta } from '../helpers/message-delta.js';
+import type { SessionEntry } from '../types.js';
 
 const DEFAULT_TIMEOUT_MS = 6000;
 const MAX_DELTA_MESSAGES = 50;
@@ -35,6 +36,8 @@ export function registerTriggerTool(server: McpServer): void {
       },
     },
     async ({ session_id, action, params, expect_messages, timeout_ms, response_format }) => {
+      // Set just before the trigger so a failure can still report what was already observed.
+      let triggerWindow: TriggerWindow | undefined;
       try {
         const state = getState();
         const session = state.getSession(session_id);
@@ -51,6 +54,7 @@ export function registerTriggerTool(server: McpServer): void {
         // call is intentionally left unbounded (no callTimeoutMs) — only the wait is bounded.
         if (action) guardMobileEnabled();
 
+        triggerWindow = { session, afterSeq: state.currentMessageSeq() };
         const { reached, delta, firedScriptIds, actionResult: triggerResult, afterSeq } =
           await triggerAndCollect(session, { action, params, minCount, timeoutMs });
 
@@ -60,14 +64,6 @@ export function registerTriggerTool(server: McpServer): void {
         const firedHooks = Array.from(state.hooks.values())
           .filter((h) => h.sessionId === session_id && firedScriptIds.has(h.scriptId))
           .map((h) => ({ id: h.id, target: h.target, type: h.type }));
-
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: session_id,
-          tool: 'trigger_and_wait',
-          params: { action, expect_messages: minCount, timeout_ms: timeoutMs },
-          status: 'success',
-        });
 
         return formatToolResponse(
           buildResult(
@@ -96,11 +92,33 @@ export function registerTriggerTool(server: McpServer): void {
           response_format,
         );
       } catch (err) {
-        if (err instanceof FridaMcpError) return formatToolResponse(err.toErrorResponse(), response_format);
-        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
+        const error = err instanceof FridaMcpError ? err : wrapFridaError(err);
+        return formatToolResponse(withObservedDelta(error, triggerWindow).toErrorResponse(), response_format);
       }
     },
   );
+}
+
+interface TriggerWindow {
+  session: SessionEntry;
+  afterSeq: number;
+}
+
+/**
+ * The trigger failed (e.g. the mobile action threw or timed out): keep any messages the
+ * instrumentation produced since the trigger started as `details.partial_observation`.
+ */
+function withObservedDelta(error: FridaMcpError, window: TriggerWindow | undefined): FridaMcpError {
+  if (!window) return error;
+  const delta = collectDelta(window.session, window.afterSeq);
+  if (delta.length === 0) return error;
+  return error.withPartialObservation(capObservedDelta(window.afterSeq, delta));
+}
+
+/** Error responses bypass `fitRenderedResult`, so cap the delta like the success path does. */
+function capObservedDelta(afterSeq: number, delta: unknown[]): Record<string, unknown> {
+  if (delta.length <= MAX_DELTA_MESSAGES) return { after_seq: afterSeq, delta };
+  return { after_seq: afterSeq, delta: delta.slice(0, MAX_DELTA_MESSAGES), truncated: true, total: delta.length };
 }
 
 /** Refuse an action trigger when mobile-mcp is off, with the contextual "just wait" suggestion. */

@@ -125,7 +125,7 @@ export function registerAdbTools(server: McpServer, deps: AdbExecDeps = defaultA
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ device, lines, filters, clear, response_format }) => {
       try {

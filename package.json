@@ -1,7 +1,7 @@
 {
   "name": "frida-mobile-mcp",
-  "version": "0.6.0",
-  "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
+  "version": "0.7.0",
+  "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation; runs next to REA, ReVa (Ghidra) and IDA MCP servers",
   "homepage": "https://github.com/monkeywave/frida-mobile-mcp#readme",
   "bugs": {
     "url": "https://github.com/monkeywave/frida-mobile-mcp/issues"
@@ -45,7 +45,11 @@
     "ios",
     "security",
     "instrumentation",
-    "reverse-engineering"
+    "reverse-engineering",
+    "rea",
+    "ghidra",
+    "dynamic-analysis",
+    "mcp-server"
   ],
   "repository": {
     "type": "git",

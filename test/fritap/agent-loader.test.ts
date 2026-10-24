@@ -31,10 +31,13 @@ import {
   readFritapAbiVersion,
   gracefulDetachFritap,
 } from '../../src/fritap/agent-loader.js';
+import { PINNED_AGENT_SHA256 } from '../../src/fritap/constants.js';
 import { FritapAgentUnavailableError } from '../../src/helpers/errors.js';
+import { sha256Hex } from '../../src/helpers/sanitize.js';
 
 const VALID_BUNDLE = '📦\n123 /agent/fritap_agent.js\n✄\nvar a=1;';
 const NOT_A_BUNDLE = 'var a=1;';
+const VALID_BUNDLE_SHA256 = sha256Hex(VALID_BUNDLE);
 
 let tmpDir: string;
 
@@ -108,7 +111,8 @@ describe('locateFritapAgent', () => {
   it('hits the cache with the default version', async () => {
     const cacheDir = path.join(tmpDir, 'cache');
     writeTmp(path.join('cache', FRITAP_AGENT_FILENAME), VALID_BUNDLE);
-    const located = await locateFritapAgent({ skipPython: true, cacheDir, env: {}, allowDownload: false });
+    // The default tag has a built-in pin, so the fake bundle needs a matching override.
+    const located = await locateFritapAgent({ skipPython: true, cacheDir, env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 }, allowDownload: false });
     expect(located.origin).toBe('cache');
     expect(located.version).toBe(DEFAULT_FRITAP_VERSION);
     expect(located.version).toBe('v2.5.2');
@@ -159,7 +163,7 @@ describe('locateFritapAgent', () => {
       allowDownload: true,
       skipPython: true,
       cacheDir,
-      env: {},
+      env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(downloaded.origin).toBe('download');
@@ -173,10 +177,108 @@ describe('locateFritapAgent', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][0]).toBe(fritapDownloadUrl('v2.5.2'));
 
-    const cached = await locateFritapAgent({ allowDownload: false, skipPython: true, cacheDir, env: {} });
+    const cached = await locateFritapAgent({ allowDownload: false, skipPython: true, cacheDir, env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 } });
     expect(cached.origin).toBe('cache');
     expect(cached.source).toBe(VALID_BUNDLE);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('pins the v2.5.2 agent by sha256', () => {
+    expect(PINNED_AGENT_SHA256['v2.5.2']).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('discards a download whose sha256 differs from the built-in pin', async () => {
+    const cacheDir = path.join(tmpDir, 'pin-cache');
+    const fetchImpl = vi.fn(async () => new Response(VALID_BUNDLE, { status: 200 }));
+    const error = await expectUnavailable(
+      locateFritapAgent({
+        allowDownload: true, skipPython: true, cacheDir, env: {},
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    );
+    expect(error.message).toContain('sha256 mismatch');
+    expect(error.message).toContain('FRITAP_AGENT_SHA256');
+    expect(fs.existsSync(path.join(cacheDir, FRITAP_AGENT_FILENAME))).toBe(false);
+  });
+
+  it('rejects when FRITAP_AGENT_SHA256 does not match the download', async () => {
+    const cacheDir = path.join(tmpDir, 'env-mismatch');
+    const fetchImpl = vi.fn(async () => new Response(VALID_BUNDLE, { status: 200 }));
+    await expectUnavailable(
+      locateFritapAgent({
+        allowDownload: true, skipPython: true, cacheDir,
+        env: { FRITAP_AGENT_SHA256: 'a'.repeat(64) },
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      })
+    );
+    expect(fs.existsSync(path.join(cacheDir, FRITAP_AGENT_FILENAME))).toBe(false);
+  });
+
+  it('applies a bare FRITAP_AGENT_SHA256 pin to the selected non-default tag (case-insensitive)', async () => {
+    const cacheDir = path.join(tmpDir, 'tag-pin');
+    const fetchImpl = vi.fn(async () => new Response(VALID_BUNDLE, { status: 200 }));
+    const located = await locateFritapAgent({
+      allowDownload: true, skipPython: true, cacheDir, version: 'v9.9.9',
+      env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256.toUpperCase() },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(located.version).toBe('v9.9.9');
+    expect(fs.existsSync(path.join(cacheDir, FRITAP_AGENT_FILENAME))).toBe(true);
+  });
+
+  it('accepts an unpinned tag with no override (warns only)', async () => {
+    const cacheDir = path.join(tmpDir, 'unpinned');
+    const fetchImpl = vi.fn(async () => new Response(VALID_BUNDLE, { status: 200 }));
+    const located = await locateFritapAgent({
+      allowDownload: true, skipPython: true, cacheDir, version: 'v9.9.9', env: {},
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(located.origin).toBe('download');
+  });
+
+  it('serves a cached bundle that matches the pin without downloading', async () => {
+    const cacheDir = path.join(tmpDir, 'pinned-cache');
+    writeTmp(path.join('pinned-cache', FRITAP_AGENT_FILENAME), VALID_BUNDLE);
+    const fetchImpl = vi.fn(async () => new Response(VALID_BUNDLE, { status: 200 }));
+    const located = await locateFritapAgent({
+      allowDownload: true, skipPython: true, cacheDir,
+      env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(located.origin).toBe('cache');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('ignores a cached bundle that does not match the pin and re-downloads it', async () => {
+    const cacheDir = path.join(tmpDir, 'tampered-cache');
+    const tampered = VALID_BUNDLE + '\n/* tampered */';
+    writeTmp(path.join('tampered-cache', FRITAP_AGENT_FILENAME), tampered);
+    const fetchImpl = vi.fn(async () => new Response(VALID_BUNDLE, { status: 200 }));
+    const located = await locateFritapAgent({
+      allowDownload: true, skipPython: true, cacheDir,
+      env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(located.origin).toBe('download');
+    expect(located.source).toBe(VALID_BUNDLE);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(path.join(cacheDir, FRITAP_AGENT_FILENAME), 'utf8')).toBe(VALID_BUNDLE);
+  });
+
+  it('treats a mismatching cache entry as absent when download is disabled', async () => {
+    const cacheDir = path.join(tmpDir, 'tampered-offline');
+    writeTmp(path.join('tampered-offline', FRITAP_AGENT_FILENAME), VALID_BUNDLE);
+    await expectUnavailable(
+      locateFritapAgent({ allowDownload: false, skipPython: true, cacheDir, env: { FRITAP_AGENT_SHA256: 'b'.repeat(64) } })
+    );
+  });
+
+  it('does not verify FRITAP_AGENT_PATH bundles (local trust)', async () => {
+    const file = writeTmp('local/fritap_agent.js', VALID_BUNDLE);
+    const located = await locateFritapAgent({
+      skipPython: true, env: { FRITAP_AGENT_PATH: file, FRITAP_AGENT_SHA256: 'c'.repeat(64) },
+    });
+    expect(located.origin).toBe('env');
   });
 
   it('rejects a downloaded body that is not a bundle and does not cache it', async () => {

@@ -1,7 +1,19 @@
+import { createHash } from 'node:crypto';
+
 const MAX_SCRIPT_SIZE = 256 * 1024; // 256KB
 const MAX_MEMORY_READ = 4 * 1024 * 1024; // 4MB
 const MAX_PROCESS_NAME_LENGTH = 256;
 const MAX_TEXT_INPUT_LENGTH = 4096;
+
+/** Full 64-hex SHA-256 of a UTF-8 string; the provenance digest reported as `source_sha256`. */
+export function sha256Hex(text: string): string {
+  return createHash('sha256').update(text, 'utf-8').digest('hex');
+}
+
+/** Narrow `value` to a non-null, non-array object (the shape of tool params and envelopes). */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export function validateScriptSource(source: string): void {
   if (!source || source.trim().length === 0) {

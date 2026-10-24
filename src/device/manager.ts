@@ -1,7 +1,15 @@
 import frida from 'frida';
+import { readFileSync } from 'node:fs';
 import type { DeviceInfo, FridaMcpConfig } from '../types.js';
-import { resolveDevice, deviceToInfo, deviceToDetailedInfo } from './resolver.js';
-import { DeviceNotFoundError } from '../helpers/errors.js';
+import {
+  resolveDevice,
+  deviceToInfo,
+  deviceToDetailedInfo,
+  toRemoteDeviceOptions,
+  type RemoteAuthOptions,
+  type ResolveOptions,
+} from './resolver.js';
+import { DeviceNotFoundError, FridaMcpError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
 import { getState } from '../state.js';
 
@@ -17,8 +25,18 @@ export class DeviceManager {
     this.config = config;
   }
 
-  async resolve(options?: { deviceId?: string; type?: 'usb' | 'local' | 'remote'; host?: string }): Promise<frida.Device> {
-    const device = await resolveDevice(this.fridaManager, options);
+  async resolve(options?: ResolveOptions): Promise<frida.Device> {
+    const device = await resolveDevice(this.fridaManager, withLoadedCertificate(options));
+    this.assertAllowed(device.id);
+    return this.remember(device);
+  }
+
+  /**
+   * Register a remote frida-server (`host[:port]`), optionally with its auth token and TLS
+   * certificate (a PEM file path), then apply the same allowlist check as `resolve()`.
+   */
+  async addRemoteDevice(address: string, options: RemoteAuthOptions = {}): Promise<frida.Device> {
+    const device = await this.fridaManager.addRemoteDevice(address, toRemoteDeviceOptions(withLoadedCertificate(options)));
     this.assertAllowed(device.id);
     return this.remember(device);
   }
@@ -100,6 +118,44 @@ export class DeviceManager {
     }
     return platform;
   }
+}
+
+/**
+ * Register a remote frida-server for the running server (startup `--remote` / FRIDA_MCP_REMOTE).
+ * `state.deviceManager` is the raw frida manager, so this goes through the wrapper to get the
+ * certificate loading and the `allowedDevices` check that the tools apply.
+ */
+export function addRemoteDeviceForState(
+  state: { deviceManager: frida.DeviceManager; config: FridaMcpConfig },
+  address: string,
+  auth: RemoteAuthOptions = {}
+): Promise<frida.Device> {
+  return new DeviceManager(state.deviceManager, state.config).addRemoteDevice(address, auth);
+}
+
+/**
+ * Read a certificate given as a file path into PEM text. frida accepts either, but reading it
+ * here turns a missing/unreadable file into a clear INVALID_ARGUMENT instead of a TLS error.
+ * Values that already contain a newline are treated as PEM text and passed through.
+ */
+export function loadRemoteCertificate(certificate: string | undefined): string | undefined {
+  if (!certificate || certificate.includes('\n')) return certificate;
+  try {
+    return readFileSync(certificate, 'utf-8');
+  } catch (err) {
+    throw new FridaMcpError(
+      'INVALID_ARGUMENT',
+      `Cannot read remote frida-server certificate "${certificate}": ${(err as Error).message}`,
+      [],
+      { certificate },
+      { remediation: 'Pass the path of the PEM certificate frida-server was started with (--certificate).' }
+    );
+  }
+}
+
+function withLoadedCertificate<T extends { certificate?: string }>(options: T | undefined): T | undefined {
+  if (!options?.certificate) return options;
+  return { ...options, certificate: loadRemoteCertificate(options.certificate) };
 }
 
 const platformCache = new Map<string, 'android' | 'ios' | 'linux' | 'macos' | 'windows'>();

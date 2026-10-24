@@ -7,7 +7,7 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError, FridaMcpError } from '../helpers/errors.js';
 import { validateProcessTarget } from '../helpers/sanitize.js';
 import { escapeRegExp } from '../helpers/regex.js';
-import { log, audit } from '../helpers/logger.js';
+import { log } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript } from '../agent/script-factory.js';
@@ -36,7 +36,6 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
       },
     },
     async ({ target, device, class_filter, response_format }) => {
-      const startTime = Date.now();
       try {
         validateProcessTarget(target);
         const state = getState();
@@ -71,15 +70,6 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
         // ~340 system modules; surface them separately so they are not lost to truncation.
         const appModules = modules.filter((m) => isAppOwnedModule(m, target));
 
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId,
-          tool: 'explore_app',
-          params: { target, device, class_filter },
-          status: 'success',
-          durationMs: Date.now() - startTime,
-        });
-
         return formatToolResponse(
           buildResult(
             {
@@ -113,13 +103,6 @@ export function registerExploreTool(server: McpServer, deviceManager: DeviceMana
         );
       } catch (err) {
         const wrapped = wrapFridaError(err);
-        audit({
-          timestamp: new Date().toISOString(),
-          tool: 'explore_app',
-          params: { target, device },
-          status: 'error',
-          durationMs: Date.now() - startTime,
-        });
         return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }

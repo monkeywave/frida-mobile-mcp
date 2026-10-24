@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { TOOL_RESULT_OUTPUT_SHAPE } from '../helpers/output-schema.js';
+import { toolOutputSchema } from '../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { responseFormatSchema } from '../constants.js';
 
-const TOPIC_LIST = 'overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, evasion, script_catalog, script_api, recipes';
+const TOPIC_LIST = 'overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, evasion, script_catalog, script_api, recipes, interop';
 
 const HELP_TOPICS: Record<string, string> = {
   overview: `# frida-mobile-mcp: Mobile Frida MCP Server
@@ -23,6 +23,8 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 
 ## Tool Categories
 - **Exploration**: explore_app, detect_app_technologies, search_classes_and_methods, describe_class, discover_crypto
+- **Artifact identity**: get_app_info (version, debuggable, every APK with on-device sha256/size; \`pull_to\` pulls and hash-verifies them for REA \`inspect_android_package\` / jadx)
+- **Evidence**: get_evidence (re-read a persisted tool result by \`evidence_id\`), export_evidence_bundle (JSON or Markdown bundle of persisted results, inline or to a file)
 - **Instrumentation**: hook_method, trace_method, trace_coverage (reachability map), execute_script, validate_script, run_prebuilt_script
 - **Observation**: watch_loads (late-loaded libs/classes + anti-Frida probes), trigger_and_wait (do a UI action, then wait for the hooks it fires)
 - **Secret recovery**: find_secrets_in_memory (RC4/AES/ChaCha/key structures in the heap), generate_memory_pattern (turn a found secret into a reusable friTap pattern), monitor_crypto (wide-net crypto-sink hooking)
@@ -35,6 +37,7 @@ A server that lets AI agents dynamically instrument and explore mobile apps on A
 - **Mobile UI**: mobile_action (tap, swipe, screenshot, elements via mobile-mcp)
 - **Knowledge & library**: search_recipes (purpose-indexed classic-JS recipes), save_script, list_saved_scripts, run_saved_script, export_script (standalone \`frida -U -l\` file) — see topics \`recipes\` and \`script_api\`
 - **Management**: get_status, get_messages, stop_instrumentation, unload_script, frida_help
+- **Next to REA / ReVa / IDA** (topic \`interop\`): routing rules, evidence mapping, context-budget env vars and an APK -> static -> hook -> report walkthrough
 
 ## Finding the right hook target (crypto example)
 1. \`discover_crypto\` — ranked candidate classes/symbols (does NOT assume javax.crypto; finds custom Java like \`Rc4Client\` and native symbols).
@@ -533,6 +536,45 @@ resource, or one at a time as \`frida://recipes/{name}\`.
 - \`list_saved_scripts\` — list what you've saved.
 - \`run_saved_script\` — run a saved script by name against a target.
 - \`export_script\` — emit a **standalone classic .js** that runs under the plain \`frida -U -f <pkg> -l file.js\` CLI (preamble + your source; bridges are provided by the frida-tools CLI, not bundled).`,
+
+  interop: `# Running next to REA, ReVa (Ghidra) and IDA
+
+Static servers answer what the code says; this server answers what it does at runtime. Full guide: docs/rea.md and docs/interop.md.
+
+## Routing rules
+- **Mobile app at runtime -> this server**: Java/ObjC bridges, prebuilt scripts, TLS keys (\`capture_tls\`), memory (\`read_memory\`, \`find_secrets_in_memory\`), UI driving (\`mobile_action\`, \`trigger_and_wait\`).
+- **Static questions -> REA** (\`inspect_android_package\`, \`search_android_classes\`, \`inspect_android_method\`, \`trace_android_references\`) or ReVa/IDA (\`decompile\`).
+- **Desktop binaries -> REA's Frida lane** (\`start_frida_session\`, \`load_frida_script\`, \`instrument_with_frida\`). REA sessions have no Java/ObjC bridge, so mobile apps belong here.
+- **Never hold one PID in sessions of both servers.** \`stop_instrumentation\` here (or REA \`close_frida_session\`) before the other side attaches.
+- **Both need frida-server 17.x** on the device; REA never installs it (\`frida_server_status\` / \`frida_server_install\` / \`frida_server_start\` here).
+- **Pick one side for ADB**: REA \`list_adb_devices\` / \`pull_adb_package\` overlap with \`adb_*\` / \`frida_server_*\` here.
+
+## Context budget (env)
+- \`FRIDA_MCP_TOOL_PROFILE=core\`: core tool set only
+- \`FRIDA_MCP_TOOLS_EXCLUDE=adb_*,frida_server_*\`: hide what REA covers
+- \`FRIDA_MCP_SCHEMA_PROFILE=compact\`: first-sentence descriptions (core + compact = 17% of the full catalog)
+- \`get_status\` reports \`hidden_tools\`.
+
+## Evidence mapping (REA -> this server)
+- \`normalized_result\` -> \`result\`; \`evidence_id\` -> \`evidence_id\` (also \`_meta.evidence_id\`); \`raw_result\`, \`limitations\` same names
+- \`coverage { scope, status, next_offset }\` -> \`coverage { status: complete|partial|unknown, scope?, next_offset?, truncated? }\`
+- \`_meta.provenance\` -> same object \`{ untrusted_content: true, source: "analysis_target" }\` on target-derived tools; effect flags -> \`_meta.effects\`
+- \`source_sha256\` -> \`source_sha256\` (\`execute_script\`), stored as \`script_sha256\` in the evidence record
+- \`details.partial_observation\` -> \`error.details.partial_observation\`
+- REA \`export_evidence_bundle\` -> \`export_evidence_bundle\` (JSON/Markdown), \`get_evidence\`, \`frida://evidence/{id}\`
+- Errors: \`INVALID_ARGUMENT\` -> invalid_request, \`*_DISABLED\` / \`DEVICE_NOT_FOUND\` -> capability_unavailable, \`RPC_TIMEOUT\` / \`FRIDA_TIMEOUT\` -> provider_timeout, \`RATE_LIMIT_EXCEEDED\` -> resource_constraint, \`SESSION_LOST\` -> unavailable
+
+## Walkthrough: APK -> static -> hook -> report
+1. \`get_app_info({ target, pull_to: "/tmp/apks" })\`: every APK with on-device sha256, pulled and hash-verified (artifact identity).
+2. REA \`inspect_android_package\` on the pulled base.apk (or REA \`pull_adb_package\`, then compare the hash).
+3. REA \`inspect_android_method\` on the candidate method.
+4. \`describe_class({ session_id, class_name })\`: loaded overloads with a hook-ready \`signature\`.
+5. \`hook_method({ target, evidence: { class, signature } })\`: hook exactly that overload.
+6. \`trigger_and_wait({ session_id, action, params })\`: drive the UI until the hook fires.
+7. \`get_messages({ session_id })\`: arguments, return value, backtrace.
+8. \`capture_tls({ target, keylog_path })\`: confirm the result on the wire.
+9. \`export_evidence_bundle({ session_id, format: "markdown", out_path })\`: plus REA's own \`export_evidence_bundle\`.
+10. Finding ledger: cite the REA evidence_id (static), this server's evidence_ids (runtime) and the APK sha256 from \`get_app_info\`.`,
 };
 
 export function registerHelpTool(server: McpServer): void {
@@ -547,7 +589,7 @@ export function registerHelpTool(server: McpServer): void {
           .describe(`Help topic: ${TOPIC_LIST}. Default: overview`),
         response_format: responseFormatSchema,
       }),
-      outputSchema: TOOL_RESULT_OUTPUT_SHAPE,
+      outputSchema: toolOutputSchema(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,

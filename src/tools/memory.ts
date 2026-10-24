@@ -5,7 +5,6 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, MemoryWriteDisabledError, wrapFridaError } from '../helpers/errors.js';
 import { validateMemoryAddress } from '../helpers/sanitize.js';
-import { audit } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript } from '../agent/script-factory.js';
@@ -181,14 +180,6 @@ export function registerMemoryTools(server: McpServer): void {
         }
         const hexData = readResult.data;
 
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: session_id,
-          tool: 'read_memory',
-          params: { address, resolved: readResult.address, size },
-          status: 'success',
-        });
-
         return formatToolResponse(
           buildResult(
             {
@@ -268,14 +259,6 @@ export function registerMemoryTools(server: McpServer): void {
             { tool: 'read_memory', args: { session_id, address, size: bytes.length }, reason: 'Inspect the target range' },
           ]);
         }
-
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: session_id,
-          tool: 'write_memory',
-          params: { address, resolved: writeResult.address, size: bytes.length },
-          status: 'success',
-        });
 
         return formatToolResponse(
           buildResult(

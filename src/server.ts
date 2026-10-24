@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/server';
-import { initState, getState } from './state.js';
+import { getState } from './state.js';
 import { loadConfig } from './config.js';
-import { initLogger, log } from './helpers/logger.js';
+import { log } from './helpers/logger.js';
+import { initRuntime } from './lib.js';
 import { getPackageVersion } from './helpers/version.js';
 import { DeviceManager } from './device/manager.js';
 import { registerAllTools } from './tools/register-all.js';
@@ -11,14 +12,8 @@ export function createServer(configOverrides?: Partial<FridaMcpConfig>): McpServ
   // Load config
   const config = loadConfig(configOverrides);
 
-  // Init logger
-  initLogger({
-    auditPath: config.auditLogPath,
-    level: process.env.FRIDA_MCP_DEBUG === '1' ? 'debug' : 'info',
-  });
-
-  // Init state
-  const state = initState(config);
+  // Init logger, evidence store and state
+  const state = initRuntime(config);
 
   // Create device manager
   const deviceManager = new DeviceManager(state.deviceManager, config);

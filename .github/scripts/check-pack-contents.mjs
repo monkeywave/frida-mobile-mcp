@@ -9,6 +9,10 @@ const REQUIRED_FILES = [
   'dist/bridges/java.js',
   'dist/bridges/objc.js',
   'dist/bridges/manifest.json',
+  'dist/lib.js',
+  'dist/lib.d.ts',
+  'skills/mobile-dynamic-analysis/SKILL.md',
+  'README.md',
 ];
 
 const packResult = JSON.parse(readFileSync(0, 'utf8'));

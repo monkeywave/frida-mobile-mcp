@@ -7,6 +7,7 @@ import type { DeviceManager } from '../device/manager.js';
 import { registerStatusTool } from './status.js';
 import { registerHelpTool } from './help.js';
 import { registerExploreTool } from './explore.js';
+import { registerAppInfoTool } from './app-info.js';
 import { registerHookTool } from './hook.js';
 import { registerTraceTool } from './trace.js';
 import { registerScriptTool } from './script.js';
@@ -30,6 +31,8 @@ import { registerDetectTool } from './detect.js';
 import { registerValidateTool } from './validate.js';
 import { registerRecipesTool } from './recipes.js';
 import { registerLibraryTools } from './library.js';
+import { registerEvidenceTools } from './evidence.js';
+import { evidenceWrapHandler } from '../helpers/evidence-hook.js';
 import { registerFritapTool } from '../fritap/tool.js';
 import { registerAdvancedDeviceTools } from './advanced/device.js';
 import { registerAdvancedProcessTools } from './advanced/process.js';
@@ -42,12 +45,29 @@ import { registerAdbTools } from './advanced/adb.js';
 import { registerInjectTools } from './advanced/inject.js';
 import { registerResources } from '../resources.js';
 import { registerPrompts } from '../prompts.js';
+import { getActiveConfig, type SchemaProfile, type ToolProfile } from '../config.js';
+import { TOOL_EFFECTS } from './effects.js';
+import { getState } from '../state.js';
+import { gateServer, policyFromConfig, type ToolPolicy } from './tool-gate.js';
 
 export interface RegisterAllOptions {
   /** Also register the `frida://` resources (default: true). */
   resources?: boolean;
   /** Also register the workflow prompts (default: true). */
   prompts?: boolean;
+  /** Tool exposure profile (default: active config, else `full`). */
+  toolProfile?: ToolProfile;
+  /** Tool-name globs never registered (default: active config, else none). */
+  toolsExclude?: string[];
+  /** Schema verbosity applied by the gate (default: active config, else `full`). */
+  schemaProfile?: SchemaProfile;
+  /** Optional decorator applied to every registered tool handler. */
+  wrapHandler?: ToolPolicy['wrapHandler'];
+  /**
+   * Persist every tool result in the evidence store and write a central audit line
+   * (default: true; the store itself is enabled by `initEvidenceStore`).
+   */
+  evidence?: boolean;
 }
 
 /** Tier 1: high-level, task-oriented tools. */
@@ -55,6 +75,7 @@ export function registerTier1Tools(server: McpServer, deviceManager: DeviceManag
   registerStatusTool(server, deviceManager);
   registerHelpTool(server);
   registerExploreTool(server, deviceManager);
+  registerAppInfoTool(server, deviceManager);
   registerHookTool(server, deviceManager);
   registerTraceTool(server, deviceManager);
   registerScriptTool(server, deviceManager);
@@ -79,6 +100,7 @@ export function registerTier1Tools(server: McpServer, deviceManager: DeviceManag
   registerValidateTool(server);
   registerRecipesTool(server);
   registerLibraryTools(server, deviceManager);
+  registerEvidenceTools(server);
 }
 
 /** Tier 2: advanced primitives (devices, processes, sessions, modules, native analysis). */
@@ -94,9 +116,46 @@ export function registerTier2Tools(server: McpServer, deviceManager: DeviceManag
   registerInjectTools(server, deviceManager);
 }
 
+/**
+ * The handler decorator for the policy: the evidence hook (unless `options.evidence === false`)
+ * wrapped around the caller's own `wrapHandler`, if any.
+ */
+function composeWrapHandler(options: RegisterAllOptions): ToolPolicy['wrapHandler'] {
+  const custom = options.wrapHandler;
+  if (options.evidence === false) return custom;
+  if (!custom) return evidenceWrapHandler;
+  return (name, cb) => evidenceWrapHandler(name, custom(name, cb));
+}
+
+/** Tool policy from explicit options, then the active runtime config, then full/[]/full. */
+function buildToolPolicy(options: RegisterAllOptions = {}): ToolPolicy {
+  const config = getActiveConfig();
+  const exposure = policyFromConfig(config ?? {});
+  return {
+    toolProfile: options.toolProfile ?? exposure.toolProfile,
+    toolsExclude: options.toolsExclude ?? exposure.toolsExclude,
+    schemaProfile: options.schemaProfile ?? config?.schemaProfile ?? 'full',
+    effects: TOOL_EFFECTS,
+    wrapHandler: composeWrapHandler(options),
+  };
+}
+
+/** Remember the applied exposure policy so get_status reports what was really hidden. */
+function recordAppliedExposure(policy: ToolPolicy): void {
+  try {
+    getState().toolExposure = { toolProfile: policy.toolProfile, toolsExclude: [...policy.toolsExclude] };
+  } catch {
+    // State is not initialised (some unit tests register tools without it); nothing to record.
+  }
+}
+
 export function registerAllTools(server: McpServer, deviceManager: DeviceManager, options: RegisterAllOptions = {}): void {
-  registerTier1Tools(server, deviceManager);
-  registerTier2Tools(server, deviceManager);
+  // Every tool registration goes through the policy gate; resources and prompts do not.
+  const policy = buildToolPolicy(options);
+  const gated = gateServer(server, policy);
+  recordAppliedExposure(policy);
+  registerTier1Tools(gated, deviceManager);
+  registerTier2Tools(gated, deviceManager);
   if (options.resources !== false) registerResources(server, deviceManager);
   if (options.prompts !== false) registerPrompts(server);
 }

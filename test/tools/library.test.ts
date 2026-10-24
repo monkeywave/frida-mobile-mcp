@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { registerLibraryTools, savedScriptsDir } from '../../src/tools/library.js';
 import { initState, getState } from '../../src/state.js';
 import { rateLimiter } from '../../src/helpers/rate-limiter.js';
+import { sha256Hex } from '../../src/helpers/sanitize.js';
 import {
   callJson,
   makeMcpHarness,
@@ -85,7 +86,8 @@ describe('script library tools', () => {
       expect(readFileSync(jsPath, 'utf-8')).toBe(CLASSIC);
       const meta = JSON.parse(readFileSync(jsonPath, 'utf-8'));
       expect(meta).toMatchObject({ name: 'rc4', description: 'RC4 hook', size: Buffer.byteLength(CLASSIC, 'utf-8') });
-      expect(meta.source_sha256).toMatch(/^[0-9a-f]{16}$/);
+      expect(meta.source_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(meta.source_sha256).toBe(sha256Hex(CLASSIC));
       expect(typeof meta.created).toBe('string');
     });
 
@@ -178,6 +180,11 @@ describe('script library tools', () => {
       expect(composed.source).toContain(PREAMBLE_MARKER);
       expect(composed.source).toContain('Script.evaluate');
       expect(composed.loadCalls).toBe(1);
+
+      // Provenance: full digest of the saved source, also recorded on the script entry.
+      expect(parsed.result.source_sha256).toBe(sha256Hex(CLASSIC));
+      const entry = getState().getSession(parsed.result.session_id)!.scripts.get(parsed.result.script_id)!;
+      expect(entry.sourceSha256).toBe(sha256Hex(CLASSIC));
     });
   });
 

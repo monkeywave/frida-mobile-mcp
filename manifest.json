@@ -3,8 +3,8 @@
   "manifest_version": "0.3",
   "name": "frida-mobile-mcp",
   "display_name": "Frida Mobile MCP",
-  "version": "0.6.0",
-  "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
+  "version": "0.7.0",
+  "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation; runs next to REA, ReVa (Ghidra) and IDA MCP servers",
   "long_description": "An MCP server that drives Frida dynamic instrumentation on Android and iOS devices. It lets an AI assistant explore apps, hook Java/Objective-C/native methods, trace calls, bypass SSL pinning, inspect memory, run pre-built analysis scripts, and (optionally) automate the device UI through mobile-mcp. A device with frida-server running (or an emulator/jailbroken device) must be reachable from this machine.",
   "author": {
     "name": "monkeywave",
@@ -24,7 +24,8 @@
     "mobile",
     "android",
     "ios",
-    "security"
+    "security",
+    "reverse-engineering"
   ],
   "server": {
     "type": "node",
@@ -38,7 +39,8 @@
         "FRIDA_DEVICE_ID": "${user_config.device_id}",
         "FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS": "${user_config.allow_custom_scripts}",
         "FRIDA_MCP_MEMORY_WRITE": "${user_config.allow_memory_write}",
-        "FRIDA_MCP_ALLOW_NATIVE_INJECTION": "${user_config.allow_native_injection}"
+        "FRIDA_MCP_ALLOW_NATIVE_INJECTION": "${user_config.allow_native_injection}",
+        "FRIDA_MCP_ALLOW_ADB_SHELL": "${user_config.allow_adb_shell}"
       }
     }
   },
@@ -70,6 +72,13 @@
       "description": "Enable the inject_library tool, which loads a native .so/.dylib into the target via Frida's injector (arbitrary native code). A capability separate from custom Frida scripts.",
       "required": false,
       "default": false
+    },
+    "allow_adb_shell": {
+      "type": "boolean",
+      "title": "Allow adb shell",
+      "description": "Enable the adb_shell tool, which runs arbitrary shell commands on an Android device via adb. Only enable for trusted analysis sessions.",
+      "required": false,
+      "default": false
     }
   },
   "tools": [
@@ -84,6 +93,10 @@
     {
       "name": "explore_app",
       "description": "Launch a mobile app and gather comprehensive initial context including loaded classes, modules, and libraries"
+    },
+    {
+      "name": "get_app_info",
+      "description": "Identify the exact installed app artifact: version, SDK levels, debuggable flag and every APK with on-device sha256/size; optionally pull and hash-verify the APKs for static analysis"
     },
     {
       "name": "hook_method",
@@ -164,6 +177,14 @@
     {
       "name": "get_messages",
       "description": "Retrieve buffered messages from active scripts and hooks"
+    },
+    {
+      "name": "get_evidence",
+      "description": "Re-read a persisted tool result (params, status, structured result) by evidence_id"
+    },
+    {
+      "name": "export_evidence_bundle",
+      "description": "Export persisted results as a JSON or Markdown bundle, inline or to a file"
     },
     {
       "name": "stop_instrumentation",
@@ -355,5 +376,107 @@
     "runtimes": {
       "node": ">=22.12.0"
     }
-  }
+  },
+  "prompts": [
+    {
+      "name": "explore_app",
+      "description": "Systematic mobile app exploration workflow: discover, map, interact, instrument, and document.",
+      "arguments": [
+        {
+          "name": "package_name",
+          "description": "App bundle ID",
+          "required": true
+        },
+        {
+          "name": "platform",
+          "description": "android or ios",
+          "required": false
+        }
+      ],
+      "text": "Explore the app ${package_name} step by step and document what you find."
+    },
+    {
+      "name": "security_audit",
+      "description": "Comprehensive mobile app security assessment: transport, storage, crypto, detection bypass, and reporting.",
+      "arguments": [
+        {
+          "name": "package_name",
+          "description": "App bundle ID",
+          "required": true
+        },
+        {
+          "name": "platform",
+          "description": "android or ios",
+          "required": false
+        },
+        {
+          "name": "focus_areas",
+          "description": "Comma-separated: transport,storage,crypto,root_detection",
+          "required": false
+        }
+      ],
+      "text": "Run a security audit of ${package_name} and report findings."
+    },
+    {
+      "name": "trace_functionality",
+      "description": "Reverse engineering workflow: trace how a specific feature is implemented in a mobile app.",
+      "arguments": [
+        {
+          "name": "package_name",
+          "description": "App bundle ID",
+          "required": true
+        },
+        {
+          "name": "functionality",
+          "description": "Feature to trace (e.g. login, payment, encryption)",
+          "required": true
+        }
+      ],
+      "text": "Trace how ${functionality} is implemented in ${package_name}."
+    },
+    {
+      "name": "write_frida_script",
+      "description": "Author, validate and save/export a working Frida script for a concrete goal using the discovery, hook, drive, verify, deliver loop.",
+      "arguments": [
+        {
+          "name": "package_name",
+          "description": "App bundle ID",
+          "required": true
+        },
+        {
+          "name": "goal",
+          "description": "What the script must achieve in one line",
+          "required": true
+        },
+        {
+          "name": "platform",
+          "description": "android or ios",
+          "required": false
+        }
+      ],
+      "text": "Write and validate a Frida script for ${package_name} that achieves: ${goal}."
+    },
+    {
+      "name": "hunt_secrets",
+      "description": "Autonomous key-hunting workflow: arm wide-net crypto and coverage hooks, drive the UI to the crypto path, and recover the key as a reusable pattern.",
+      "arguments": [
+        {
+          "name": "package_name",
+          "description": "App bundle ID",
+          "required": true
+        },
+        {
+          "name": "secret_kind",
+          "description": "What you are after (e.g. RC4 key, AES key, API token); defaults to any symmetric key",
+          "required": false
+        },
+        {
+          "name": "platform",
+          "description": "android or ios",
+          "required": false
+        }
+      ],
+      "text": "Hunt for secrets in ${package_name} and recover them as reusable patterns."
+    }
+  ]
 }

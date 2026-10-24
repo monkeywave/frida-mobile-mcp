@@ -10,6 +10,7 @@ import {
   fridaServerStatus,
   fridaServerStop,
   parsePids,
+  redactTokenArg,
   selfExcludingPattern,
   type ServerOpContext,
 } from '../../src/tools/advanced/server.js';
@@ -72,6 +73,9 @@ describe('server pure helpers', () => {
 
   it('rejects shell-metacharacter injection in tokens', () => {
     expect(() => assertSafeToken('a; rm -rf /', 'x')).toThrow(/not allowed/);
+    expect(() => assertSafeToken('~/frida-server', 'remote_path')).toThrow(/remote_path "~\/frida-server" contains characters/);
+    expect(assertSafeToken('/data/local/tmp/frida-server', 'remote_path')).toBe('/data/local/tmp/frida-server');
+    expect(() => buildStartCommand({ remotePath: '/tmp/x', listenAddress: '127.0.0.1', port: 1, extraArgs: [], useSu: false, token: 's3cret$(id)' })).toThrow(/^(?!.*s3cret).*token.*not allowed/);
     expect(() => buildStartCommand({ remotePath: '/tmp/x$(id)', listenAddress: '127.0.0.1', port: 1, extraArgs: [], useSu: true })).toThrow(/not allowed/);
     expect(() => buildStopCommand({ processName: 'fs && reboot', signal: 'TERM', useSu: false })).toThrow(/not allowed/);
   });
@@ -129,6 +133,36 @@ describe('fridaServerStart', () => {
         async () => {},
       ),
     ).rejects.toThrow(/did not come up/);
+  });
+});
+
+describe('frida-server --token', () => {
+  const base = { remotePath: '/data/local/tmp/frida-server', listenAddress: '0.0.0.0', port: 27042, extraArgs: [], useSu: true, processName: 'frida-server' };
+
+  it('appends --token to the start argv', () => {
+    const cmd = buildStartCommand({ ...base, token: 'Tok_123' });
+    expect(cmd).toBe("su -c '/data/local/tmp/frida-server -l 0.0.0.0:27042 -D --token Tok_123'");
+  });
+
+  it('rejects an unsafe token without echoing it', () => {
+    expect(() => buildStartCommand({ ...base, token: "x';reboot;'" })).toThrow(/token contains characters/);
+    try {
+      buildStartCommand({ ...base, token: 'bad$(id)' });
+    } catch (err) {
+      expect((err as Error).message).not.toContain('bad$(id)');
+    }
+  });
+
+  it('spawns with the real token but reports it redacted', async () => {
+    const { deps, calls } = fakeDeps((argv) => (argv.includes('pgrep') ? { stdout: '555' } : {}));
+    const result = await fridaServerStart(ctxFor(deps), { ...base, token: 'Tok_123' }, async () => {});
+    expect(calls.some((c) => c.includes('--token Tok_123'))).toBe(true);
+    expect(result.command).toContain('--token ***');
+    expect(result.command).not.toContain('Tok_123');
+  });
+
+  it('redactTokenArg is a no-op without a token', () => {
+    expect(redactTokenArg('a -D', undefined)).toBe('a -D');
   });
 });
 

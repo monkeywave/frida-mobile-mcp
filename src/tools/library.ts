@@ -13,14 +13,13 @@
 import { z } from 'zod';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { createHash } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { getConfigPath } from '../config.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, CustomScriptDisabledError, wrapFridaError } from '../helpers/errors.js';
-import { validateScriptSource, validateFilePath } from '../helpers/sanitize.js';
+import { validateScriptSource, validateFilePath, sha256Hex } from '../helpers/sanitize.js';
 import { responseFormatSchema } from '../constants.js';
 import { toolOutputSchema } from '../helpers/output-schema.js';
 import { buildPreamble } from '../agent/preamble.js';
@@ -30,7 +29,6 @@ import { detectSourceKind, resolveTimeoutMs, runGuarded } from './script.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
-import { audit } from '../helpers/logger.js';
 
 /** Legal saved-script names: a plain basename, no path separators or traversal. */
 const SCRIPT_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -119,7 +117,7 @@ function registerSaveScriptTool(server: McpServer): void {
         mkdirSync(dir, { recursive: true });
 
         const bytes = Buffer.byteLength(source, 'utf-8');
-        const sourceSha256 = createHash('sha256').update(source).digest('hex').slice(0, 16);
+        const sourceSha256 = sha256Hex(source);
         const meta: SavedScriptMeta = {
           name,
           ...(description ? { description } : {}),
@@ -130,14 +128,6 @@ function registerSaveScriptTool(server: McpServer): void {
 
         writeFileSync(jsPath, source, 'utf-8');
         writeFileSync(jsonPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
-
-        audit({
-          timestamp: meta.created,
-          tool: 'save_script',
-          params: { name, overwrite, bytes },
-          status: 'success',
-          scriptHash: sourceSha256,
-        });
 
         return formatToolResponse(
           buildResult(
@@ -279,7 +269,6 @@ function registerRunSavedScriptTool(server: McpServer, deviceManager: DeviceMana
       },
     },
     async ({ name, target, device, session_id, persistent, response_format }) => {
-      const startTime = Date.now();
       try {
         const state = getState();
         if (!state.config.allowCustomScripts) {
@@ -322,6 +311,7 @@ function registerRunSavedScriptTool(server: McpServer, deviceManager: DeviceMana
         const keepLoaded = persistent ?? true;
         const timeoutMs = resolveTimeoutMs(undefined, keepLoaded);
         const scriptName = `saved:${name}`;
+        const savedSourceSha256 = sha256Hex(source);
 
         const prepared = await prepareSavedSource(source, sessionEntry.platform, name);
         const script = await createAgentScript(sessionEntry.session, {
@@ -342,6 +332,7 @@ function registerRunSavedScriptTool(server: McpServer, deviceManager: DeviceMana
           name: scriptName,
           persistent: keepLoaded,
           createdAt: Date.now(),
+          sourceSha256: savedSourceSha256,
         });
 
         attachScriptSinks(script, sessionEntry.id, scriptId, {
@@ -360,15 +351,6 @@ function registerRunSavedScriptTool(server: McpServer, deviceManager: DeviceMana
           throw err;
         }
 
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: sessionEntry.id,
-          tool: 'run_saved_script',
-          params: { name, target, persistent: keepLoaded },
-          status: 'success',
-          durationMs: Date.now() - startTime,
-        });
-
         return formatToolResponse(
           buildResult(
             {
@@ -376,6 +358,7 @@ function registerRunSavedScriptTool(server: McpServer, deviceManager: DeviceMana
               session_id: sessionEntry.id,
               name,
               persistent: keepLoaded,
+              source_sha256: savedSourceSha256,
               messages_received: messages.length,
               messages: messages.slice(0, 50),
             },

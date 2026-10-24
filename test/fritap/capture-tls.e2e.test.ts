@@ -1,7 +1,7 @@
 /**
  * Live smoke test for capture_tls through an in-memory MCP client.
- * Runs only with FRIDA_E2E=1 and a reachable device (FRIDA_DEVICE_ID, default emulator-5556)
- * that has frida-server 17.x and the target app (FRIDA_E2E_TARGET, default com.example.rc4demo).
+ * Runs only with FRIDA_MCP_E2E_DEVICE set (or legacy FRIDA_E2E=1) and a reachable device (FRIDA_MCP_E2E_DEVICE or legacy FRIDA_DEVICE_ID, default emulator-5556)
+ * that has frida-server 17.x and the target app (FRIDA_MCP_E2E_TARGET or legacy FRIDA_E2E_TARGET, default com.example.rc4demo).
  */
 import { describe, it, expect } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
@@ -9,9 +9,9 @@ import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const E2E = process.env.FRIDA_E2E === '1';
-const DEVICE = process.env.FRIDA_DEVICE_ID ?? 'emulator-5556';
-const TARGET = process.env.FRIDA_E2E_TARGET ?? 'com.example.rc4demo';
+const E2E = process.env.FRIDA_MCP_E2E_DEVICE !== undefined || process.env.FRIDA_E2E === '1';
+const DEVICE = process.env.FRIDA_MCP_E2E_DEVICE ?? process.env.FRIDA_DEVICE_ID ?? 'emulator-5556';
+const TARGET = process.env.FRIDA_MCP_E2E_TARGET ?? process.env.FRIDA_E2E_TARGET ?? 'com.example.rc4demo';
 
 type ToolResult = { content: Array<{ type: string; text: string }>; structuredContent?: Record<string, unknown>; isError?: boolean };
 

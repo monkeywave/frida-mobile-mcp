@@ -5,11 +5,11 @@ import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
-import { validateProcessTarget } from '../helpers/sanitize.js';
-import { log, audit } from '../helpers/logger.js';
+import { validateProcessTarget, sha256Hex } from '../helpers/sanitize.js';
+import { log } from '../helpers/logger.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
-import { createAgentScript } from '../agent/script-factory.js';
+import { createAgentScript, composeAgentSource, type AgentScriptOptions } from '../agent/script-factory.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
 import { formatModuleOffset, parseTarget, RESOLVE_TARGET_SNIPPET } from '../agent/address.js';
 import { JAVA_CLASS_LOOKUP_SNIPPET } from '../agent/java-class-lookup.js';
@@ -234,7 +234,6 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
       },
     },
     async ({ target, session_id, method: methodInput, evidence, device, log_args, log_retval, log_backtrace, spawn: shouldSpawn, interceptor_options, response_format }) => {
-      const startTime = Date.now();
       try {
         const state = getState();
         const method = resolveHookMethod(methodInput, evidence);
@@ -267,7 +266,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           interceptor_options
         );
 
-        const script = await createAgentScript(sessionEntry.session, {
+        const agentOptions: AgentScriptOptions = {
           sessionEntry: sessionEntry,
           source: generateHookScript(hookType),
           platform: sessionEntry.platform,
@@ -276,7 +275,11 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           options: { ...hookOptions, platform: sessionEntry.platform },
           // Native hooks never touch Java/ObjC; skip the bridge payload for them.
           bridges: hookType === 'native' ? [] : undefined,
-        });
+        };
+        // Provenance: digest of the full composed source (preamble with options + bridges + body).
+        const composed = composeAgentSource(agentOptions);
+        const sourceSha256 = sha256Hex(composed.source);
+        const script = await createAgentScript(sessionEntry.session, agentOptions, composed);
         const scriptId = state.generateId();
         const hookId = state.generateId();
 
@@ -287,6 +290,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           name: `hook:${method}`,
           persistent: true,
           createdAt: Date.now(),
+          sourceSha256,
         };
         sessionEntry.scripts.set(scriptId, scriptEntry);
 
@@ -346,15 +350,6 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         const missReason = state.hooks.get(hookId)?.liveness?.reason;
         log(missReason ? 'warn' : 'info', missReason ? `Hook on ${method} not installed: ${missReason} (hook: ${hookId})` : `Hook installed on ${method} (hook: ${hookId})`);
 
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: sessionEntry.id,
-          tool: 'hook_method',
-          params: { target, session_id, method, evidence, log_args, log_retval, log_backtrace, interceptor_options },
-          status: 'success',
-          durationMs: Date.now() - startTime,
-        });
-
         const installedHook = state.hooks.get(hookId);
         return formatToolResponse(
           buildResult(
@@ -362,6 +357,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
               hook_id: hookId,
               session_id: sessionEntry.id,
               script_id: scriptId,
+              source_sha256: sourceSha256,
               pid,
               method,
               hook_type: hookType,
@@ -386,13 +382,6 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         );
       } catch (err) {
         const wrapped = wrapFridaError(err);
-        audit({
-          timestamp: new Date().toISOString(),
-          tool: 'hook_method',
-          params: { target, session_id, method: methodInput, evidence },
-          status: 'error',
-          durationMs: Date.now() - startTime,
-        });
         return formatToolResponse(wrapped.toErrorResponse(), response_format);
       }
     }

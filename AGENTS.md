@@ -11,7 +11,7 @@ npm run lint                      # tsc --noEmit
 npm test                          # vitest run (pretest rebuilds bridges); no device needed
 npx vitest run test/tools/x.test.ts
 FRIDA_MCP_E2E_DEVICE=emulator-5556 [FRIDA_MCP_E2E_TARGET=com.example.rc4demo] npx vitest run test/e2e
-FRIDA_E2E=1 FRIDA_DEVICE_ID=emulator-5556 npx vitest run test/fritap/capture-tls.e2e.test.ts
+FRIDA_MCP_E2E_DEVICE=emulator-5556 npx vitest run test/fritap/capture-tls.e2e.test.ts   # legacy FRIDA_E2E=1/FRIDA_DEVICE_ID/FRIDA_E2E_TARGET still work
 node dist/index.js --help         # CLI smoke test (CI runs this)
 ```
 
@@ -31,14 +31,14 @@ Node >= 22.12. CI (`.github/workflows/ci.yml`) runs build, lint, test, the CLI s
 
 | Path | Purpose |
 |------|---------|
-| `src/index.ts` | CLI (commander): default `serve`, `doctor`, `setup`; flags -> `RuntimeConfig` overrides / env |
+| `src/index.ts` | CLI (commander): default `serve`, `doctor`, `setup`, `gadget`; flags -> `RuntimeConfig` overrides / env |
 | `src/server.ts`, `src/lib.ts` | `createServer()` and the library API (`registerFridaTools`, `createSessionServer`, re-exports) |
 | `src/tools/register-all.ts` | The single list of tools (Tier 1 / Tier 2), resources and prompts. Add new tools here. |
-| `src/tools/*.ts` | Tier 1 tools; `src/tools/advanced/*.ts` Tier 2 (device, process, session, modules, intercept, native) |
+| `src/tools/*.ts` | Tier 1 tools; `src/tools/advanced/*.ts` Tier 2 (device, process, session, modules, intercept, native, server, adb, inject) |
 | `src/tools/help.ts` | `frida_help` topics; `test/tools/help.test.ts` greps this file, update both together |
 | `src/fritap/` | `capture_tls`: agent discovery/download (`agent-loader.ts`), capture state, pcap writer |
 | `src/agent/` | script composition (`script-factory.ts`), preamble, bridge loader, ESM compiler, removed-API lint, address parsing |
-| `src/scripts/` | The 8 prebuilt templates + `registry.ts`; shared body helpers in `template-body.ts` |
+| `src/scripts/` | The 9 prebuilt templates + `registry.ts`; shared body helpers in `template-body.ts` |
 | `src/config.ts`, `src/types.ts` | Config file schema, defaults, env overrides (`FRIDA_MCP_*`) |
 | `src/helpers/` | result envelope (`result-builder.ts`), errors/codes (`errors.ts`), rate limiter, logger/audit log, RPC timeouts |
 | `src/transport/` | stdio and Streamable HTTP (`/mcp`, token, Host/Origin checks) |

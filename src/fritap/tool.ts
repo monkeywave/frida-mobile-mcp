@@ -15,7 +15,7 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { validateFilePath, validateProcessTarget } from '../helpers/sanitize.js';
-import { audit, log } from '../helpers/logger.js';
+import { log } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession, withTimeout } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
@@ -170,14 +170,6 @@ async function runCaptureTls(deviceManager: DeviceManager, args: CaptureTlsArgs)
   }
   trackCapture(sessionEntry.id, scriptId, script, capture, args.duration_seconds);
   await new Promise((resolve) => setTimeout(resolve, INITIAL_OUTPUT_WAIT_MS));
-
-  audit({
-    timestamp: new Date().toISOString(),
-    sessionId: sessionEntry.id,
-    tool: 'capture_tls',
-    params: { target: args.target, spawn: args.spawn, anti_root: args.anti_root, full_capture: fullCapture, keylog_path: args.keylog_path, pcap_path: args.pcap_path },
-    status: 'success',
-  });
 
   return buildCaptureResult(sessionEntry, scriptId, agent, abi, capture, initial, args, fullCapture);
 }

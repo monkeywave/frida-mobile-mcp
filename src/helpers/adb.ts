@@ -35,6 +35,30 @@ export interface AdbExecDeps {
 export const DEFAULT_ADB_TIMEOUT_MS = 10_000;
 
 // ---------------------------------------------------------------------------
+// Shell-word guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Device-side commands are joined into one `sh -c` string by adb, so every interpolated value
+ * (remote path, process name, listen address, extra arg, token) must be free of shell
+ * metacharacters. Allows only the characters legitimately needed for paths/flags/addresses.
+ * `~` is excluded: an unquoted leading `~` is tilde-expanded by the device shell.
+ */
+const SAFE_SHELL_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+export function isSafeShellWord(value: string): boolean {
+  return SAFE_SHELL_WORD.test(value);
+}
+
+/** Throw INVALID_ARGUMENT unless `value` is a safe shell word; the message never echoes the value (it may be a secret). */
+export function assertSafeShellWord(value: string, label: string): string {
+  if (!isSafeShellWord(value)) {
+    throw new FridaMcpError('INVALID_ARGUMENT', `${label} contains characters that are not allowed in a device-side command.`);
+  }
+  return value;
+}
+
+// ---------------------------------------------------------------------------
 // Process execution
 // ---------------------------------------------------------------------------
 

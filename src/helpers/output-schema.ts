@@ -41,16 +41,22 @@ export const TOOL_RESULT_OUTPUT_SHAPE = z.object({
   suggested_next: z.array(suggestedActionSchema),
   evidence_id: z.string().optional().describe('Unique id of this observation (REA/ReVa evidence convention)'),
   limitations: z.array(z.string()).optional(),
-  coverage: z.object({ status: z.enum(['complete', 'unknown']), note: z.string().optional() }).optional(),
+  coverage: z
+    .object({
+      status: z.enum(['complete', 'partial', 'unknown']),
+      note: z.string().optional(),
+      scope: z.string().optional().describe('What was scanned (module exports, session messages ...)'),
+      next_offset: z.number().optional().describe('Offset/cursor to pass back to continue a partial result'),
+      truncated: z.boolean().optional().describe('True when items were dropped (limit, eviction, trimming)'),
+    })
+    .optional(),
   raw_result: z.unknown().optional(),
 });
 
 /**
- * Output schema to pass to `registerTool`. Returns `undefined` when the configured schema
- * profile is `compact` (FRIDA_MCP_SCHEMA_PROFILE=compact) so size-limited hosts receive a
- * smaller tool catalog; `full` (default) advertises the envelope schema.
+ * Output schema to pass to `registerTool`. The `compact` schema profile drops it centrally in
+ * the tool gate (`applyPolicyToConfig`), so this always returns the envelope schema.
  */
-export function toolOutputSchema(): typeof TOOL_RESULT_OUTPUT_SHAPE | undefined {
-  const profile = process.env.FRIDA_MCP_SCHEMA_PROFILE?.trim().toLowerCase();
-  return profile === 'compact' ? undefined : TOOL_RESULT_OUTPUT_SHAPE;
+export function toolOutputSchema(): typeof TOOL_RESULT_OUTPUT_SHAPE {
+  return TOOL_RESULT_OUTPUT_SHAPE;
 }

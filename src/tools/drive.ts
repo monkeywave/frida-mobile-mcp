@@ -6,7 +6,6 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
-import { audit } from '../helpers/logger.js';
 import { type DeltaMessage } from '../helpers/message-delta.js';
 import { triggerAndCollect } from '../helpers/trigger-and-collect.js';
 import { withTimeout } from '../helpers/with-timeout.js';
@@ -210,14 +209,6 @@ export function registerDriveTool(server: McpServer, _deviceManager: DeviceManag
         const newlyCovered = coverageEntry
           ? coverageEntry.allTargets.filter((t) => coveredSeen.has(t) && !coveredAtStart.has(t))
           : [];
-
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: session_id,
-          tool: 'drive_coverage',
-          params: { coverage_id, stop_on: stopOn, max_steps: maxSteps, step_timeout_ms: stepTimeoutMs },
-          status: 'success',
-        });
 
         return formatToolResponse(
           buildResult(

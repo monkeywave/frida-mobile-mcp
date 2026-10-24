@@ -11,10 +11,16 @@ vi.mock('frida', () => ({
 }));
 
 const { createAgentScript } = vi.hoisted(() => ({ createAgentScript: vi.fn() }));
-vi.mock('../../src/agent/script-factory.js', () => ({ createAgentScript }));
+// Only script creation is faked; composeAgentSource stays real so the hash assertion covers it.
+vi.mock('../../src/agent/script-factory.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/agent/script-factory.js')>()),
+  createAgentScript,
+}));
 
 import { registerTraceTool } from '../../src/tools/trace.js';
 import { initState, getState } from '../../src/state.js';
+import { sha256Hex } from '../../src/helpers/sanitize.js';
+import { composeAgentSource } from '../../src/agent/script-factory.js';
 import {
   callJson,
   fakeScript,
@@ -134,5 +140,52 @@ describe('trace_method MCP tool handler', () => {
 
     expect(parsed.error.code).toBe('DEVICE_NOT_FOUND');
     expect(createAgentScript).not.toHaveBeenCalled();
+  });
+  it('reports source_sha256 of the composed agent source and records it on the script entry', async () => {
+    const parsed = await callJson(client, 'trace_method', { target: 'com.example.app', method: 'com.example.*', duration_seconds: 0 });
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.result.source_sha256).toMatch(/^[0-9a-f]{64}$/);
+    // Hashed from the real composition, which is handed to createAgentScript (composed once).
+    const [, opts, composed] = createAgentScript.mock.calls[0];
+    expect(composed).toEqual(composeAgentSource(opts));
+    expect(parsed.result.source_sha256).toBe(sha256Hex(composed.source));
+  });
+  it('keeps captured invocations as details.partial_observation when the unload fails', async () => {
+    // Deliver two trace hits while the script loads, then fail the unload (session lost).
+    script.load.mockImplementation(async () => {
+      const onMessage = script.message.connect.mock.calls[0][0];
+      onMessage({ type: 'send', payload: { method: 'a', args: [] } }, null);
+      onMessage({ type: 'send', payload: { method: 'b', args: [] } }, null);
+    });
+    script.unload.mockRejectedValue(new Error('script is destroyed'));
+
+    const parsed = await callJson(client, 'trace_method', {
+      target: 'com.example.app',
+      method: 'com.example.*',
+      duration_seconds: 0,
+    });
+
+    expect(parsed.result).toBeUndefined();
+    expect(parsed.error.message).toMatch(/script is destroyed/);
+    expect(parsed.error.details.partial_observation).toEqual({
+      invocations_count: 2,
+      invocations: [{ method: 'a', args: [] }, { method: 'b', args: [] }],
+    });
+  });
+
+  it('removes the trace and its script entry even when the unload fails', async () => {
+    script.unload.mockRejectedValue(new Error('script is destroyed'));
+
+    const parsed = await callJson(client, 'trace_method', {
+      target: 'com.example.app',
+      method: 'com.example.*',
+      duration_seconds: 0,
+    });
+
+    expect(parsed.error.message).toMatch(/script is destroyed/);
+    expect(getState().traces.size).toBe(0);
+    const traceScripts = [...getState().sessions.values()].flatMap((s) => [...s.scripts.values()].filter((e) => e.name.startsWith('trace:')));
+    expect(traceScripts).toEqual([]);
   });
 });

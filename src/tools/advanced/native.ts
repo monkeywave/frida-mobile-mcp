@@ -21,7 +21,6 @@ import type { SessionEntry } from '../../types.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
 import { validateFilePath } from '../../helpers/sanitize.js';
-import { audit } from '../../helpers/logger.js';
 import { responseFormatSchema } from '../../constants.js';
 import { createAgentScript } from '../../agent/script-factory.js';
 import { RESOLVE_TARGET_SNIPPET } from '../../agent/address.js';
@@ -524,7 +523,6 @@ function registerDumpModuleMemory(server: McpServer): void {
             return dumpModuleImage(script, image as ModuleImage, outputPath, max_bytes ?? DEFAULT_DUMP_MAX_BYTES);
           }
         );
-        audit({ timestamp: new Date().toISOString(), sessionId: session_id, tool: 'dump_module_memory', params: { module_name, out_path: outputPath, bytes: dump.bytes }, status: 'success' });
         return formatToolResponse(buildResult({ session_id, module: module_name, ...dump }, [
           { tool: 'enumerate_exports', args: { session_id, module_name }, reason: 'Export names to apply in the static tool' },
           { tool: 'resolve_address', args: { session_id, target: `${module_name}+0x0` }, reason: 'Translate offsets found in the dump back to runtime addresses' },

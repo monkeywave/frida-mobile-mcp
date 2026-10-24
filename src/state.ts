@@ -14,6 +14,7 @@ import type {
   DetachRecord,
   CrashSummary,
 } from './types.js';
+import type { ExposurePolicy } from './tools/tool-gate.js';
 
 const MAX_RECENT_DETACHES = 20;
 const CLEANUP_INTERVAL_MS = 60_000;
@@ -34,6 +35,11 @@ class ServerState {
   coverage: Map<string, CoverageEntry> = new Map();
   oracles: Map<string, OracleEntry> = new Map();
   config: FridaMcpConfig;
+  /**
+   * Tool exposure policy actually applied by `registerAllTools` (it may come from explicit
+   * options rather than `config`). Null until tools are registered.
+   */
+  toolExposure: ExposurePolicy | null = null;
   /** Ring buffer (newest last) of recent session detaches and process crashes. */
   recentDetaches: DetachRecord[] = [];
   private lastCleanupAt: number = 0;
@@ -148,6 +154,8 @@ class ServerState {
     // Batch eviction: trim when 10% over limit to avoid splice on every message
     const evictionThreshold = Math.floor(this.config.maxMessageBuffer * 1.1);
     if (script.messages.length > evictionThreshold) {
+      const dropped = script.messages.length - this.config.maxMessageBuffer;
+      script.lastEvictedSeq = script.messages[dropped - 1]?.seq;
       script.messages = script.messages.slice(-this.config.maxMessageBuffer);
     }
 

@@ -1,4 +1,5 @@
-import type { ErrorCategory, ErrorResponse, RecoveryAction } from '../types.js';
+import { randomUUID } from 'node:crypto';
+import type { ErrorCategory, ErrorDetails, ErrorResponse, RecoveryAction } from '../types.js';
 
 /** Optional classification overrides; defaults are derived from the error code. */
 export interface ErrorMeta {
@@ -20,6 +21,7 @@ const ERROR_CLASSIFICATION: Record<string, { category: ErrorCategory; retryable:
   PROCESS_NOT_FOUND: { category: 'request', retryable: false },
   // Same vocabulary as the hook liveness reason; retryable because the class may load later.
   CLASS_NOT_LOADED: { category: 'request', retryable: true },
+  EVIDENCE_NOT_FOUND: { category: 'request', retryable: false },
   CUSTOM_SCRIPTS_DISABLED: { category: 'authorization', retryable: false },
   MEMORY_WRITE_DISABLED: { category: 'authorization', retryable: false },
   ADB_SHELL_DISABLED: { category: 'authorization', retryable: false },
@@ -50,6 +52,7 @@ export class FridaMcpError extends Error {
   remediation?: string;
   recoveryActions: RecoveryAction[];
   context: Record<string, unknown>;
+  details?: ErrorDetails;
 
   constructor(
     code: string,
@@ -69,6 +72,12 @@ export class FridaMcpError extends Error {
     this.remediation = meta.remediation ?? remediationFromRecoveryActions(recoveryActions);
   }
 
+  /** Attach what was observed before the failure (REA `details.partial_observation`). Returns `this`. */
+  withPartialObservation(observation: unknown): this {
+    this.details = { ...this.details, partial_observation: observation };
+    return this;
+  }
+
   toErrorResponse(): ErrorResponse {
     return {
       error: {
@@ -79,6 +88,8 @@ export class FridaMcpError extends Error {
         ...(this.remediation ? { remediation: this.remediation } : {}),
         recovery_actions: this.recoveryActions,
         context: this.context,
+        ...(this.details ? { details: this.details } : {}),
+        evidence_id: randomUUID(),
       },
     };
   }

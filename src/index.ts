@@ -9,7 +9,8 @@ import { startHttpServer, type HttpServerHandle } from './transport/http.js';
 import { logStartupBanner, log } from './helpers/logger.js';
 import { getPackageVersion } from './helpers/version.js';
 import { getState } from './state.js';
-import { getActiveConfig, type RuntimeConfig } from './config.js';
+import { addRemoteDeviceForState } from './device/manager.js';
+import { getActiveConfig, isToolProfile, parseToolsExclude, TOOL_PROFILES, type RuntimeConfig, type ToolProfile } from './config.js';
 import { runDoctor } from './cli/doctor.js';
 import { runSetup, CLIENT_NAMES, type ClientName } from './cli/setup.js';
 import {
@@ -26,9 +27,15 @@ interface ServeOptions {
   port: string;
   httpToken?: string;
   device?: string;
+  remote?: string;
+  remoteToken?: string;
+  remoteCert?: string;
   allowCustomScripts?: boolean;
   allowMemoryWrite?: boolean;
   allowNativeInjection?: boolean;
+  allowAdbShell?: boolean;
+  toolProfile?: string;
+  excludeTools?: string;
   mobileMcp: boolean;
   debug?: boolean;
   listDevices?: boolean;
@@ -40,6 +47,7 @@ interface SetupCliOptions {
   allowCustomScripts?: boolean;
   allowMemoryWrite?: boolean;
   allowNativeInjection?: boolean;
+  allowAdbShell?: boolean;
   print?: boolean;
 }
 
@@ -72,9 +80,15 @@ program
   .option('--port <number>', 'HTTP port, 0 picks a free port (http transport)', '3000')
   .option('--http-token <token>', 'Bearer token for the http transport (or FRIDA_MCP_HTTP_TOKEN)')
   .option('--device <id>', 'Frida device ID to use')
+  .option('--remote <host[:port]>', 'Add a remote frida-server at startup (or FRIDA_MCP_REMOTE)')
+  .option('--remote-token <token>', 'Auth token of the remote frida-server (or FRIDA_MCP_REMOTE_TOKEN)')
+  .option('--remote-cert <path>', 'TLS certificate (PEM) of the remote frida-server (or FRIDA_MCP_REMOTE_CERT)')
   .option('--allow-custom-scripts', 'Allow execution of custom Frida scripts')
   .option('--allow-memory-write', 'Allow memory write operations')
   .option('--allow-native-injection', 'Allow native library injection (inject_library)')
+  .option('--allow-adb-shell', 'Allow raw adb shell commands (adb_shell)')
+  .option('--tool-profile <profile>', 'Tools to expose: full or core (or FRIDA_MCP_TOOL_PROFILE)')
+  .option('--exclude-tools <globs>', 'Comma-separated tool-name globs to hide, e.g. "adb_*" (or FRIDA_MCP_TOOLS_EXCLUDE)')
   .option('--no-mobile-mcp', 'Disable mobile-mcp integration')
   .option('--debug', 'Enable debug logging')
   .option('--list-devices', 'List Frida devices and exit')
@@ -93,6 +107,7 @@ program
   .option('--allow-custom-scripts', 'Pass --allow-custom-scripts to the server')
   .option('--allow-memory-write', 'Pass --allow-memory-write to the server')
   .option('--allow-native-injection', 'Pass --allow-native-injection to the server')
+  .option('--allow-adb-shell', 'Pass --allow-adb-shell to the server')
   .option('--print', 'Print the configuration instead of writing it')
   .action((opts: SetupCliOptions) => runWithErrorHandling(async () => process.exit(setup(opts))));
 
@@ -126,6 +141,7 @@ function setup(opts: SetupCliOptions): number {
     allowCustomScripts: opts.allowCustomScripts,
     allowMemoryWrite: opts.allowMemoryWrite,
     allowNativeInjection: opts.allowNativeInjection,
+    allowAdbShell: opts.allowAdbShell,
     print: opts.print,
   });
 }
@@ -154,13 +170,28 @@ async function listDevices(): Promise<void> {
   }
 }
 
+/** Unlike the env variable (which falls back with a warning), a bad CLI flag is a hard error. */
+function parseToolProfileFlag(value: string): ToolProfile {
+  const normalized = value.trim().toLowerCase();
+  if (!isToolProfile(normalized)) {
+    throw new Error(`Invalid --tool-profile "${value}": expected ${TOOL_PROFILES.join(' or ')}`);
+  }
+  return normalized;
+}
+
 function configOverridesFrom(opts: ServeOptions): Partial<RuntimeConfig> {
   const overrides: Partial<RuntimeConfig> = {};
   if (opts.allowCustomScripts) overrides.allowCustomScripts = true;
   if (opts.allowMemoryWrite) overrides.memoryWriteEnabled = true;
   if (opts.allowNativeInjection) overrides.allowNativeInjection = true;
+  if (opts.allowAdbShell) overrides.allowAdbShell = true;
+  if (opts.toolProfile !== undefined) overrides.toolProfile = parseToolProfileFlag(opts.toolProfile);
+  if (opts.excludeTools !== undefined) overrides.toolsExclude = parseToolsExclude(opts.excludeTools);
   if (opts.mobileMcp === false) overrides.mobileMcp = { enabled: false } as RuntimeConfig['mobileMcp'];
   if (opts.httpToken) overrides.httpToken = opts.httpToken;
+  if (opts.remote) overrides.remoteDevice = opts.remote;
+  if (opts.remoteToken) overrides.remoteToken = opts.remoteToken;
+  if (opts.remoteCert) overrides.remoteCertificate = opts.remoteCert;
   return overrides;
 }
 
@@ -170,7 +201,10 @@ async function addRemoteDeviceFromConfig(config: RuntimeConfig | null): Promise<
   if (!address) return;
   try {
     const state = getState();
-    const device = await state.deviceManager.addRemoteDevice(address);
+    const device = await addRemoteDeviceForState(state, address, {
+      token: config?.remoteToken,
+      certificate: config?.remoteCertificate,
+    });
     if (!state.selectedDevice && !process.env.FRIDA_DEVICE_ID) {
       state.selectedDevice = device;
     }

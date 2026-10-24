@@ -3,7 +3,7 @@ import { toolOutputSchema } from '../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
-import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
+import { buildResult, formatToolResponse, pagedCoverage } from '../helpers/result-builder.js';
 import { wrapFridaError, FridaMcpError } from '../helpers/errors.js';
 import { resolveInstrumentationTarget } from './hook.js';
 import { log } from '../helpers/logger.js';
@@ -70,6 +70,7 @@ export function registerSearchTool(server: McpServer, deviceManager: DeviceManag
         } finally {
           await script.unload();
         }
+        const truncated = results.length >= maxResults;
 
         return formatToolResponse(
           buildResult(
@@ -79,14 +80,21 @@ export function registerSearchTool(server: McpServer, deviceManager: DeviceManag
               pattern,
               total_matches: results.length,
               classes: results,
-              truncated: results.length >= maxResults,
+              truncated,
             },
             [
               ...(results.length > 0
                 ? [{ tool: 'hook_method', args: { target, method: results[0].name }, reason: `Hook methods in ${results[0].name}` }]
                 : []),
               { tool: 'search_classes_and_methods', args: { target, pattern, include_methods: true }, reason: 'Search again with methods included' },
-            ]
+            ],
+            {
+              // The tool has no offset parameter, so a truncated search has no next_offset.
+              limitations: truncated
+                ? [`Stopped at limit=${maxResults} matches; narrow the pattern or raise limit to see the rest.`]
+                : undefined,
+              coverage: pagedCoverage(`${platform ?? 'unknown'} loaded classes matching ${pattern}`, truncated),
+            }
           ),
           response_format
         );

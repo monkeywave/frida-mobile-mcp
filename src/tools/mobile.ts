@@ -5,7 +5,7 @@ import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { MobileMcpUnavailableError, FridaMcpError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
-import { log, audit } from '../helpers/logger.js';
+import { log } from '../helpers/logger.js';
 
 // Available mobile-mcp actions for reference
 const MOBILE_ACTIONS = [
@@ -98,13 +98,6 @@ export function registerMobileTool(server: McpServer): void {
         try {
           const { callMobileAction } = await import('../mobile-mcp/call.js');
           const result = await callMobileAction(action, params, fridaDeviceId);
-
-          audit({
-            timestamp: new Date().toISOString(),
-            tool: 'mobile_action',
-            params: { action, params },
-            status: 'success',
-          });
 
           return formatToolResponse(
             buildResult(

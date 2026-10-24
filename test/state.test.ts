@@ -164,6 +164,45 @@ describe('ServerState', () => {
     });
   });
 
+  describe('addMessageToScript eviction bookkeeping', () => {
+    function seedScript(): ScriptEntry {
+      const session = makeSession('s1', 100);
+      const script = makeScript('sc1');
+      session.scripts.set(script.id, script);
+      state.addSession(session);
+      return script;
+    }
+
+    it('records lastEvictedSeq when trimming (maxMessageBuffer=10)', () => {
+      const script = seedScript();
+      const base = state.currentMessageSeq();
+      // Threshold is floor(10 * 1.1) = 11; the 12th message triggers a trim back to 10.
+      for (let i = 0; i < 12; i++) state.addMessageToScript('s1', 'sc1', makeMessage(i));
+
+      expect(script.messages).toHaveLength(10);
+      expect(script.lastEvictedSeq).toBe(base + 2);
+      expect(script.messages[0].seq).toBe(base + 3);
+    });
+
+    it('advances lastEvictedSeq across multiple trims', () => {
+      const script = seedScript();
+      const base = state.currentMessageSeq();
+      for (let i = 0; i < 14; i++) state.addMessageToScript('s1', 'sc1', makeMessage(i));
+
+      // Trims at message 12 (drop 2) and again at message 14 (drop 2).
+      expect(script.lastEvictedSeq).toBe(base + 4);
+      expect(script.messages[0].seq).toBe(base + 5);
+    });
+
+    it('leaves lastEvictedSeq undefined when nothing was evicted', () => {
+      const script = seedScript();
+      for (let i = 0; i < 11; i++) state.addMessageToScript('s1', 'sc1', makeMessage(i));
+
+      expect(script.messages).toHaveLength(11);
+      expect(script.lastEvictedSeq).toBeUndefined();
+    });
+  });
+
   describe('session capacity', () => {
     it('ensureSessionCapacity throws once maxSessions is reached', () => {
       state.addSession(makeSession('s1', 1));

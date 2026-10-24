@@ -73,6 +73,20 @@ describe('frida_help tool', () => {
     expect(helpFileContent).toContain('.init_array');
   });
 
+  it('defines the interop topic and lists it in TOPIC_LIST', () => {
+    expect(helpFileContent).toContain('  interop:');
+    expect(helpFileContent).toMatch(/const TOPIC_LIST = '[^']*\binterop\b[^']*'/);
+    // Routing, context budget, evidence mapping and the walkthrough must be present.
+    expect(helpFileContent).toContain('inspect_android_package');
+    expect(helpFileContent).toContain('inspect_android_method');
+    expect(helpFileContent).toContain('FRIDA_MCP_TOOL_PROFILE=core');
+    expect(helpFileContent).toContain('FRIDA_MCP_TOOLS_EXCLUDE=adb_*,frida_server_*');
+    expect(helpFileContent).toContain('normalized_result');
+    expect(helpFileContent).toContain('_meta.provenance');
+    expect(helpFileContent).toContain('get_app_info({ target, pull_to');
+    expect(helpFileContent).toContain('export_evidence_bundle({ session_id, format: "markdown"');
+  });
+
   it('defines the native and tls topics', () => {
     expect(helpFileContent).toContain('  native:');
     expect(helpFileContent).toContain('  tls:');

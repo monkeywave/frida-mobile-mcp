@@ -12,3 +12,6 @@ script_archive/
 coverage/
 .vitest/
 ./mcp-publisher
+
+# local announcement drafts, never published
+docs/announcements/

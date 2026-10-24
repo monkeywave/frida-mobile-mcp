@@ -8,9 +8,10 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { initState, getState, type ServerState } from './state.js';
 import { loadConfig, getActiveConfig, type RuntimeConfig } from './config.js';
 import { initLogger, log } from './helpers/logger.js';
+import { initEvidenceStore } from './helpers/evidence-store.js';
 import { getPackageVersion } from './helpers/version.js';
 import { DeviceManager } from './device/manager.js';
-import { registerAllTools } from './tools/register-all.js';
+import { registerAllTools, type RegisterAllOptions } from './tools/register-all.js';
 import { getScriptRegistry } from './scripts/registry.js';
 import type { ScriptTemplate } from './types.js';
 
@@ -22,9 +23,12 @@ export {
   getConfigPath,
   DEFAULT_CONFIG,
   parseSchemaProfile,
+  parseToolProfile,
+  parseToolsExclude,
   parseMaxResponseChars,
 } from './config.js';
-export type { RuntimeConfig, SchemaProfile } from './config.js';
+export type { RuntimeConfig, SchemaProfile, ToolProfile } from './config.js';
+export { CORE_TOOLS, gateServer, isToolExposed, globToRegExp, type ToolPolicy } from './tools/tool-gate.js';
 export { DeviceManager, platformFromSystemParameters } from './device/manager.js';
 export { resolveDevice, deviceToInfo, deviceToDetailedInfo } from './device/resolver.js';
 export { getScriptRegistry } from './scripts/registry.js';
@@ -73,12 +77,17 @@ export const scriptRegistry: ScriptRegistryLike = getScriptRegistry();
 export interface RegisterFridaToolsOptions {
   /** Device manager shared by the tools; defaults to one built on the global server state. */
   deviceManager?: DeviceManager;
-  /** Configuration used when the global state still has to be initialised. */
+  /**
+   * Configuration used when the global state still has to be initialised. Its tool profile,
+   * exclude globs and schema profile also select the registered tool catalog.
+   */
   config?: RuntimeConfig;
   /** Also register the `frida://` resources (default: true). */
   resources?: boolean;
   /** Also register the workflow prompts (default: true). */
   prompts?: boolean;
+  /** Optional decorator applied to every registered tool handler. */
+  wrapHandler?: RegisterAllOptions['wrapHandler'];
 }
 
 /** Server identity shared by `createServer` and per-session HTTP servers. */
@@ -89,6 +98,20 @@ export const SERVER_CAPABILITIES = {
 } as const;
 
 /**
+ * Bootstrap the process-global runtime for `config`: logger, evidence store, then the
+ * server state. Shared by `createServer` and `ensureState`.
+ */
+export function initRuntime(config: RuntimeConfig): ServerState {
+  initLogger({
+    auditPath: config.auditLogPath,
+    level: process.env.FRIDA_MCP_DEBUG === '1' ? 'debug' : 'info',
+  });
+  // Every tool result is persisted unless the evidence store is disabled.
+  initEvidenceStore(config.evidence);
+  return initState(config);
+}
+
+/**
  * Return the process-global state, initialising it (and the logger) on first use so that
  * library consumers do not have to call `loadConfig`/`initState` themselves.
  */
@@ -96,12 +119,7 @@ export function ensureState(config?: RuntimeConfig): ServerState {
   try {
     return getState();
   } catch {
-    const resolved = config ?? getActiveConfig() ?? loadConfig();
-    initLogger({
-      auditPath: resolved.auditLogPath,
-      level: process.env.FRIDA_MCP_DEBUG === '1' ? 'debug' : 'info',
-    });
-    return initState(resolved);
+    return initRuntime(config ?? getActiveConfig() ?? loadConfig());
   }
 }
 
@@ -114,7 +132,16 @@ export function registerFridaTools(server: McpServer, options: RegisterFridaTool
   const state = ensureState(options.config);
   const deviceManager = options.deviceManager ?? new DeviceManager(state.deviceManager, state.config);
 
-  registerAllTools(server, deviceManager, { resources: options.resources, prompts: options.prompts });
+  // `options.config` is not made the active config (loadConfig does that), so its tool policy
+  // is passed explicitly; without it registerAllTools falls back to the active config.
+  registerAllTools(server, deviceManager, {
+    resources: options.resources,
+    prompts: options.prompts,
+    toolProfile: options.config?.toolProfile,
+    toolsExclude: options.config?.toolsExclude,
+    schemaProfile: options.config?.schemaProfile,
+    wrapHandler: options.wrapHandler,
+  });
 
 
   log('debug', 'Frida tools registered on MCP server');

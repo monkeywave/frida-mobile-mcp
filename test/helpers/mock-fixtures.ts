@@ -12,7 +12,7 @@
 import { vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
-import { registerAllTools } from '../../src/tools/register-all.js';
+import { registerAllTools, type RegisterAllOptions } from '../../src/tools/register-all.js';
 import type { ServerState } from '../../src/state.js';
 import type { FridaMcpConfig, SessionEntry, ScriptEntry } from '../../src/types.js';
 
@@ -289,6 +289,13 @@ export function agentOptions(source: string): Record<string, any> {
 
 // --- Tool registry introspection ------------------------------------------
 
+/** Explicit full-catalog policy so tests cover every tool regardless of any active config. */
+export const FULL_TOOL_POLICY = { toolProfile: 'full', toolsExclude: [], schemaProfile: 'full' } as const satisfies {
+  toolProfile: 'full';
+  toolsExclude: string[];
+  schemaProfile: 'full';
+};
+
 /**
  * The canonical set of tool names this server registers, read from a live
  * `registerAllTools` + `listTools()` rather than a hand-maintained list. This is
@@ -296,13 +303,29 @@ export function agentOptions(source: string): Record<string, any> {
  * check every other surface (README, help.ts, manifest.json) against.
  */
 export async function getRegisteredToolNames(): Promise<string[]> {
-  const deviceManager = makeDeviceManager(makeDevice());
-  const harness = await makeMcpHarness((server) =>
-    registerAllTools(server, deviceManager, { resources: false, prompts: false })
+  return (await listRegisteredTools()).map((t) => t.name).sort();
+}
+
+/**
+ * Harness with every tool registered (no resources/prompts) under the full-catalog policy;
+ * `options` overrides any `registerAllTools` option (profile, exclude, schema, wrapHandler ...).
+ */
+export function makeFullHarness(options: RegisterAllOptions = {}): Promise<McpHarness> {
+  return makeMcpHarness((server) =>
+    registerAllTools(server, makeDeviceManager(makeDevice()), {
+      resources: false,
+      prompts: false,
+      ...FULL_TOOL_POLICY,
+      ...options,
+    })
   );
+}
+
+/** The advertised `tools/list` entries of a `makeFullHarness(options)` server. */
+export async function listRegisteredTools(options: RegisterAllOptions = {}): Promise<Array<Json & { name: string }>> {
+  const harness = await makeFullHarness(options);
   try {
-    const { tools } = await harness.client.listTools();
-    return tools.map((t) => t.name).sort();
+    return (await harness.client.listTools()).tools as Array<Json & { name: string }>;
   } finally {
     await harness.close();
   }

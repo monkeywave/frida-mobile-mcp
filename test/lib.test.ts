@@ -52,6 +52,34 @@ describe('lib entry point', () => {
     expect(a).not.toBe(b);
     expect(lib.getState()).toBe(lib.ensureState());
   });
+
+  it('initRuntime initialises the global state from the config', () => {
+    const config = { ...lib.loadConfig(), ...TEST_CONFIG, evidence: { enabled: false } };
+    const state = lib.initRuntime(config);
+    expect(lib.getState()).toBe(state);
+    expect(state.config).toBe(config);
+    state.stopCleanupTimer();
+  });
+
+  it('registerFridaTools applies the tool profile of options.config', async () => {
+    const server = new McpServer({ name: 'host', version: '0.0.0' });
+    const config = { ...lib.loadConfig(), ...TEST_CONFIG, toolProfile: 'core' as const, toolsExclude: [] };
+    lib.registerFridaTools(server, { config });
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'lib-test', version: '0.0.0' });
+    await client.connect(clientTransport);
+
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toContain('hook_method');
+    expect(names).not.toContain('adb_shell');
+    // get_status reports the policy that was applied, even though state.config may differ.
+    expect(lib.getState().toolExposure).toEqual({ toolProfile: 'core', toolsExclude: [] });
+
+    await client.close();
+    await server.close();
+  });
 });
 
 describe('getCharacterLimit', () => {

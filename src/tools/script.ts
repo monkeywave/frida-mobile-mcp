@@ -8,11 +8,10 @@ import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError, CustomScriptDisabledError, ScriptError, FridaMcpError } from '../helpers/errors.js';
-import { validateProcessTarget, validateScriptSource, validateFilePath } from '../helpers/sanitize.js';
-import { log, audit } from '../helpers/logger.js';
+import { validateProcessTarget, validateScriptSource, validateFilePath, sha256Hex } from '../helpers/sanitize.js';
+import { log } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
-import { createHash } from 'node:crypto';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript, isFridaCompileBundle } from '../agent/script-factory.js';
 import { compileEsmAgent } from '../agent/compiler.js';
@@ -32,6 +31,7 @@ const ONESHOT_COLLECT_MS = 2_000;
 
 export class ScriptTimeoutError extends FridaMcpError {
   constructor(timeoutMs: number, scriptId: string, partialMessages: unknown[], terminated: boolean) {
+    const kept = partialMessages.slice(0, 50);
     super(
       'SCRIPT_TIMEOUT',
       `Script did not finish its initial run within ${timeoutMs} ms and was ${terminated ? 'terminated' : 'interrupted and unloaded'}.`,
@@ -39,8 +39,9 @@ export class ScriptTimeoutError extends FridaMcpError {
         { tool: 'execute_script', args: { timeout_ms: 0 }, reason: 'Re-run without a timeout if the script is expected to block' },
         { tool: 'get_messages', reason: 'Inspect output from other scripts in the session' },
       ],
-      { timeout_ms: timeoutMs, script_id: scriptId, terminated, partial_messages: partialMessages.slice(0, 50) }
+      { timeout_ms: timeoutMs, script_id: scriptId, terminated, partial_messages: kept }
     );
+    this.withPartialObservation({ partial_messages: kept });
   }
 }
 
@@ -208,7 +209,6 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
       },
     },
     async ({ target, source, file_path, device, session_id, persistent, bridges, source_kind, skip_validation, timeout_ms, response_format }) => {
-      const startTime = Date.now();
       try {
         const state = getState();
 
@@ -262,6 +262,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
         });
         const scriptId = state.generateId();
         const messages: Array<Record<string, unknown>> = [];
+        const sourceSha256 = sha256Hex(scriptSource);
 
         const scriptEntry = {
           id: scriptId,
@@ -270,6 +271,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
           name: scriptName,
           persistent: keepLoaded,
           createdAt: Date.now(),
+          sourceSha256,
         };
         sessionEntry.scripts.set(scriptId, scriptEntry);
 
@@ -296,17 +298,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
           throw err;
         }
 
-        const scriptHash = createHash('sha256').update(scriptSource).digest('hex').slice(0, 16);
-
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: sessionEntry.id,
-          tool: 'execute_script',
-          params: { target, file_path, persistent: keepLoaded, bridges, source_kind: prepared.kind, timeout_ms: timeoutMs },
-          status: 'success',
-          durationMs: Date.now() - startTime,
-          scriptHash,
-        });
+        const scriptHash = sourceSha256.slice(0, 16);
 
         return formatToolResponse(
           buildResult(
@@ -320,6 +312,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
               messages_received: messages.length,
               messages: messages.slice(0, 50),
               script_hash: scriptHash,
+              source_sha256: sourceSha256,
             },
             keepLoaded
               ? [

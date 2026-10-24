@@ -7,7 +7,7 @@ import { attachScriptSinks } from '../helpers/script-sink.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { resolveInstrumentationTarget } from './hook.js';
-import { log, audit } from '../helpers/logger.js';
+import { log } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
@@ -36,7 +36,6 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
       },
     },
     async ({ target, session_id, device, response_format }) => {
-      const startTime = Date.now();
       try {
         const resolved = resolveInstrumentationTarget(target, session_id);
         const state = getState();
@@ -88,15 +87,6 @@ export function registerSslTool(server: McpServer, deviceManager: DeviceManager)
 
         const bypassed = results.filter((r: any) => r.status === 'bypassed').map((r: any) => r.method);
         const failed = results.filter((r: any) => r.status === 'failed').map((r: any) => r.method);
-
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: sessionEntry.id,
-          tool: 'bypass_ssl_pinning',
-          params: { target, device },
-          status: 'success',
-          durationMs: Date.now() - startTime,
-        });
 
         return formatToolResponse(
           buildResult(

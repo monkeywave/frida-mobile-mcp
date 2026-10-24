@@ -67,6 +67,13 @@ describe('buildServerEntry', () => {
     expect(buildServerEntry({ allowNativeInjection: true }).args).toEqual(['-y', 'frida-mobile-mcp', '--allow-native-injection']);
   });
 
+  it('bakes in --allow-adb-shell as an independent capability', () => {
+    expect(buildServerEntry({ allowAdbShell: true }).args).toEqual(['-y', 'frida-mobile-mcp', '--allow-adb-shell']);
+    expect(buildServerEntry({ allowNativeInjection: true, allowAdbShell: true }).args).toEqual([
+      '-y', 'frida-mobile-mcp', '--allow-native-injection', '--allow-adb-shell',
+    ]);
+  });
+
   it('omits env when device is an empty string', () => {
     expect(buildServerEntry({ device: '' }).env).toBeUndefined();
   });

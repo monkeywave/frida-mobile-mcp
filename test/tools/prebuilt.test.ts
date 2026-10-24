@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { registerPrebuiltTool } from '../../src/tools/prebuilt.js';
 import { initState, getState } from '../../src/state.js';
 import { rateLimiter } from '../../src/helpers/rate-limiter.js';
+import { sha256Hex } from '../../src/helpers/sanitize.js';
 import {
   agentOptions,
   callJson,
@@ -81,6 +82,12 @@ describe('run_prebuilt_script MCP tool', () => {
     // The running script is tracked on the session.
     const session = getState().getSession(parsed.result.session_id)!;
     expect(session.scripts.get(parsed.result.script_id)!.name).toBe('prebuilt:crypto_monitor');
+
+    // Provenance: template name plus the full digest of the composed source actually loaded.
+    expect(parsed.result.template).toBe('crypto_monitor');
+    expect(parsed.result.source_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsed.result.source_sha256).toBe(sha256Hex(script.source));
+    expect(session.scripts.get(parsed.result.script_id)!.sourceSha256).toBe(parsed.result.source_sha256);
   });
 
   it('enforces the per-minute script rate limit', async () => {

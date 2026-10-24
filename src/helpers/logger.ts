@@ -55,6 +55,8 @@ export interface AuditEntry {
   status: 'success' | 'error';
   durationMs?: number;
   scriptHash?: string;
+  /** Id of the persisted evidence record for this call. */
+  evidence_id?: string;
 }
 
 export function audit(entry: AuditEntry): void {

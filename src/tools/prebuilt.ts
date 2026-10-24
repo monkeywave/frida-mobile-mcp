@@ -5,13 +5,13 @@ import type { DeviceManager } from '../device/manager.js';
 import { getState } from '../state.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError, FridaMcpError, MemoryWriteDisabledError } from '../helpers/errors.js';
-import { validateProcessTarget } from '../helpers/sanitize.js';
-import { log, audit } from '../helpers/logger.js';
+import { validateProcessTarget, sha256Hex } from '../helpers/sanitize.js';
+import { log } from '../helpers/logger.js';
 import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { getScriptRegistry } from '../scripts/registry.js';
 import { responseFormatSchema } from '../constants.js';
-import { createAgentScript } from '../agent/script-factory.js';
+import { createAgentScript, composeAgentSource, type AgentScriptOptions } from '../agent/script-factory.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
 import type { PlatformContext } from '../types.js';
 
@@ -112,14 +112,18 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
         // runtime from __FRIDA_MCP__.options, so the user's options are passed through unchanged.
         const platform = sessionEntry.platform;
         const scriptOptions = options || {};
-        const script = await createAgentScript(sessionEntry.session, {
+        const agentOptions: AgentScriptOptions = {
           sessionEntry: sessionEntry,
           source: template.generate(scriptOptions, toPlatformContext(platform)),
           platform,
           name: `prebuilt:${template.name}`,
           kind: 'generated',
           options: { ...scriptOptions, platform },
-        });
+        };
+        // Provenance: digest of the full composed source (preamble + bridges + template body).
+        const composed = composeAgentSource(agentOptions);
+        const sourceSha256 = sha256Hex(composed.source);
+        const script = await createAgentScript(sessionEntry.session, agentOptions, composed);
         const scriptId = state.generateId();
         const messages: Array<Record<string, unknown>> = [];
 
@@ -130,6 +134,7 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
           name: `prebuilt:${script_name}`,
           persistent: true,
           createdAt: Date.now(),
+          sourceSha256,
         });
 
         attachScriptSinks(script, sessionEntry.id, scriptId, {
@@ -144,14 +149,6 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
         // Wait briefly to collect initial output
         await new Promise((resolve) => setTimeout(resolve, 2000));
 
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: sessionEntry.id,
-          tool: 'run_prebuilt_script',
-          params: { script_name, target, options },
-          status: 'success',
-        });
-
         return formatToolResponse(
           buildResult(
             {
@@ -159,6 +156,8 @@ export function registerPrebuiltTool(server: McpServer, deviceManager: DeviceMan
               script_id: scriptId,
               session_id: sessionEntry.id,
               description: template.description,
+              template: script_name,
+              source_sha256: sourceSha256,
               initial_messages: messages.slice(0, 20),
               message: `Script "${script_name}" loaded and running. Use get_messages for ongoing output.`,
             },

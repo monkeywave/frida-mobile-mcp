@@ -6,7 +6,7 @@ import type { ScriptEntry, SessionEntry } from '../types.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
-import { log, audit } from '../helpers/logger.js';
+import { log } from '../helpers/logger.js';
 
 export function registerCleanupTool(server: McpServer): void {
   registerStopInstrumentationTool(server);
@@ -74,13 +74,6 @@ function registerStopInstrumentationTool(server: McpServer): void {
           );
         }
 
-        audit({
-          timestamp: new Date().toISOString(),
-          tool: 'stop_instrumentation',
-          params: { session_id, target, all },
-          status: 'success',
-        });
-
         return formatToolResponse(
           buildResult(
             {
@@ -138,13 +131,6 @@ function registerUnloadScriptTool(server: McpServer): void {
         state.touchSession(session_id);
 
         log('info', `Script ${script_id} (${scriptEntry.name ?? 'unnamed'}) unloaded from session ${session_id}`);
-        audit({
-          timestamp: new Date().toISOString(),
-          sessionId: session_id,
-          tool: 'unload_script',
-          params: { session_id, script_id },
-          status: 'success',
-        });
 
         return formatToolResponse(
           buildResult(

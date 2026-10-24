@@ -27,8 +27,13 @@ If REA, ReVa/Ghidra or an IDA MCP server is available, ask it first for the pack
 structure, exported components and candidate functions (e.g. \`inspect_android_package\`,
 \`decompile\`). Note interesting addresses in \`module+0xoffset\` form; frida-mobile-mcp
 accepts that notation directly in \`hook_method\` / \`hook_function\`.
+With REA: pull the installed APK with \`get_app_info({ target: "${package_name}", pull_to: "<host dir>" })\`
+(or REA \`pull_adb_package\`), run REA \`inspect_android_package\` on it and
+\`inspect_android_method\` on candidate methods. Keep the APK sha256 from \`get_app_info\`
+so static and runtime evidence refer to the same build.
 
 ## Phase 1: DISCOVER
+0. Call \`get_app_info({ target: "${package_name}" })\` first to record the artifact identity (version, every APK with its sha256)
 1. Call \`get_status()\` to check connected devices
 2. Call \`explore_app({ target: "${package_name}" })\` to launch the app and gather initial context (classes, modules, libraries)
 3. Call \`detect_app_technologies({ target: "${package_name}" })\` to learn the TLS/crypto/network stacks in use
@@ -58,7 +63,9 @@ Produce a structured summary:
 - Key classes and their roles
 - Network endpoints discovered
 - Data storage patterns
-- Security observations`,
+- Security observations
+- Analysed artifact: version and APK sha256 from \`get_app_info\`
+Export the bundle with \`export_evidence_bundle({ format: "markdown", out_path: "<host path>" })\` and cite both servers' evidence IDs (frida-mobile-mcp and the static server, e.g. REA).`,
         },
       }],
     })
@@ -88,8 +95,10 @@ Execute these assessment phases:
 
 ## Phase 0: STATIC BASELINE (optional)
 If a static-analysis MCP server (REA \`inspect_android_package\`, ReVa/Ghidra \`decompile\`, IDA MCP) is connected, collect manifest permissions, exported components, pinning/root-detection code locations and native library candidates first. Keep addresses as \`module+0xoffset\` so they can be hooked directly.
+With REA: get the exact installed APK with \`get_app_info({ target: "${package_name}", pull_to: "<host dir>" })\` (or REA \`pull_adb_package\`), then REA \`inspect_android_package\` (manifest, components) and \`inspect_android_method\` on pinning/root-detection candidates.
 
 ## Phase 1: RECONNAISSANCE
+0. \`get_app_info({ target: "${package_name}" })\` — artifact identity: version, debuggable flag, every APK with its sha256
 1. \`explore_app({ target: "${package_name}" })\` — launch and enumerate
 2. \`detect_app_technologies({ target: "${package_name}" })\` — TLS stack, crypto and network libraries
 3. \`search_classes_and_methods({ target: "${package_name}", pattern: "crypto|security|ssl|trust|keychain|shared.*pref" })\`
@@ -123,7 +132,9 @@ Produce a security report with:
 - Finding severity (Critical/High/Medium/Low/Info)
 - Reproduction steps using exact tool calls; cite the \`evidence_id\` of each tool result
 - Remediation recommendations
-- Overall risk assessment`,
+- Overall risk assessment
+- Analysed artifact: version and APK sha256 from \`get_app_info\`
+20. Export the bundle with \`export_evidence_bundle({ format: "markdown", out_path: "<host path>" })\` and cite both servers' evidence IDs (frida-mobile-mcp and the static server, e.g. REA) in the finding ledger`,
         },
       }],
     })
@@ -146,7 +157,8 @@ Produce a security report with:
           text: `You are a reverse engineering agent. Trace how "${functionality}" is implemented in ${package_name}.
 
 ## Phase 1: STATIC DISCOVERY
-1. If a static-analysis MCP server is connected (REA, ReVa/Ghidra \`decompile\`, IDA MCP), locate candidate functions for "${functionality}" there first and note them as \`module+0xoffset\` (native) or \`Class.method\` (Java/ObjC)
+0. \`get_app_info({ target: "${package_name}" })\` — artifact identity (version, every APK with its sha256); add \`pull_to: "<host dir>"\` to hand the same APK to a static tool
+1. If a static-analysis MCP server is connected (REA, ReVa/Ghidra \`decompile\`, IDA MCP), locate candidate functions for "${functionality}" there first and note them as \`module+0xoffset\` (native) or \`Class.method\` (Java/ObjC). With REA: \`inspect_android_package\` on the pulled APK (or REA \`pull_adb_package\`), then \`inspect_android_method\` on each candidate; its parameter types feed \`hook_method({ evidence: { class, signature } })\`
 2. \`explore_app({ target: "${package_name}" })\` — launch and get context
 3. \`detect_app_technologies({ target: "${package_name}" })\` — which libraries are involved
 4. \`search_classes_and_methods({ target: "${package_name}", pattern: "${functionality}", include_methods: true })\`
@@ -182,7 +194,9 @@ Produce:
 - Call graph (entry point → intermediate → leaf operations)
 - Data transformations at each step
 - External dependencies (APIs, libraries)
-- Key constants and configuration values discovered`,
+- Key constants and configuration values discovered
+- Analysed artifact: version and APK sha256 from \`get_app_info\`
+Export the bundle with \`export_evidence_bundle({ format: "markdown", out_path: "<host path>" })\` and cite both servers' evidence IDs (frida-mobile-mcp and the static server, e.g. REA).`,
         },
       }],
     })

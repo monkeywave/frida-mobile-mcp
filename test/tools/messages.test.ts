@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { registerMessagesTool } from '../../src/tools/messages.js';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { registerMessagesTool, findEvictionLoss, messagesEvidenceMeta } from '../../src/tools/messages.js';
 import { initState, getState } from '../../src/state.js';
 import { loadConfig } from '../../src/config.js';
 import {
@@ -141,5 +141,68 @@ describe('get_messages MCP tool', () => {
     expect(parsed.result.messages_count).toBe(0);
     expect(parsed.result.last_index).toBe(7);
     expect(parsed.result.truncated).toBe(false);
+  });
+  describe('eviction-aware coverage', () => {
+    let originalBuffer: number;
+
+    beforeEach(() => {
+      originalBuffer = getState().config.maxMessageBuffer;
+      getState().config.maxMessageBuffer = 10;
+    });
+
+    afterEach(() => {
+      getState().config.maxMessageBuffer = originalBuffer;
+    });
+
+    function seedWithEviction() {
+      const state = getState();
+      seedSession(state, [scriptEntry(SCRIPT_A, fakeScript())]);
+      for (let i = 0; i < 12; i++) addMessage(SCRIPT_A, 'hook_invocation', { i });
+      return state.sessions.get(DEFAULT_SESSION_ID)!.scripts.get(SCRIPT_A)!;
+    }
+
+    it('wires eviction loss into limitations and partial, truncated coverage', async () => {
+      const script = seedWithEviction();
+
+      const parsed = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, since: 0 });
+
+      expect(parsed.result.messages_count).toBe(10);
+      expect(parsed.limitations).toEqual([
+        `messages before seq ${script.lastEvictedSeq! + 1} were evicted (maxMessageBuffer=10); raise maxMessageBuffer or poll more often`,
+      ]);
+      expect(parsed.coverage).toEqual({
+        status: 'partial',
+        scope: `session:${DEFAULT_SESSION_ID}`,
+        next_offset: parsed.result.last_index,
+        truncated: true,
+      });
+    });
+  });
+});
+
+describe('findEvictionLoss / messagesEvidenceMeta', () => {
+  const evicted = { lastEvictedSeq: 5 } as any;
+
+  it('returns null when no script evicted anything', () => {
+    expect(findEvictionLoss([{} as any], 0)).toBeNull();
+  });
+
+  it('reports the newest lost seq only when the cursor precedes it', () => {
+    expect(findEvictionLoss([evicted, { lastEvictedSeq: 3 } as any], 0)).toBe(5);
+    expect(findEvictionLoss([evicted], 5)).toBeNull();
+  });
+
+  it.each([
+    ['nothing lost, limit not hit', false, null, [], { status: 'complete', scope: 'session:s1', next_offset: 9 }],
+    ['limit hit', true, null, [], { status: 'partial', scope: 'session:s1', next_offset: 9, truncated: true }],
+    [
+      'messages evicted',
+      false,
+      5,
+      ['messages before seq 6 were evicted (maxMessageBuffer=10); raise maxMessageBuffer or poll more often'],
+      { status: 'partial', scope: 'session:s1', next_offset: 9, truncated: true },
+    ],
+  ] as const)('builds coverage when %s', (_label, limitHit, lastEvictedSeq, limitations, coverage) => {
+    expect(messagesEvidenceMeta('s1', 9, limitHit, lastEvictedSeq, 10)).toEqual({ limitations, coverage });
   });
 });

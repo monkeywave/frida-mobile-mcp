@@ -148,3 +148,53 @@ describe('Error envelope classification (REA/ReVa conventions)', () => {
     expect(err.context.searched).toEqual(['/a', '/b']);
   });
 });
+
+describe('toErrorResponse evidence_id', () => {
+  it('stamps a fresh uuid evidence_id on every error body', () => {
+    const err = new FridaMcpError('SESSION_NOT_FOUND', 'gone');
+    const first = err.toErrorResponse().error.evidence_id;
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(err.toErrorResponse().error.evidence_id).not.toBe(first);
+  });
+
+  it('classifies EVIDENCE_NOT_FOUND as a non-retryable request error', () => {
+    const err = new FridaMcpError('EVIDENCE_NOT_FOUND', 'unknown id');
+    expect(err.category).toBe('request');
+    expect(err.retryable).toBe(false);
+  });
+});
+
+describe('details.partial_observation', () => {
+  it('emits details.partial_observation attached via withPartialObservation', () => {
+    const err = new FridaMcpError('FRIDA_ERROR', 'x').withPartialObservation({ seen: [1, 2] });
+    expect(err.toErrorResponse().error.details).toEqual({ partial_observation: { seen: [1, 2] } });
+  });
+
+  it('attaches a partial observation via withPartialObservation and returns this', () => {
+    const err = new FridaMcpError('FRIDA_ERROR', 'x');
+    expect(err.withPartialObservation({ hits: 3 })).toBe(err);
+    expect(err.toErrorResponse().error.details?.partial_observation).toEqual({ hits: 3 });
+  });
+
+  it('omits the details key when nothing was observed', () => {
+    const res = new FridaMcpError('FRIDA_ERROR', 'x').toErrorResponse();
+    expect('details' in res.error).toBe(false);
+  });
+
+  it('ScriptTimeoutError carries partial messages in both context and details', async () => {
+    const { ScriptTimeoutError } = await import('../../src/tools/script.js');
+    const messages = [{ type: 'send', payload: 'a' }, { type: 'send', payload: 'b' }];
+    const err = new ScriptTimeoutError(1000, 'sc1', messages, false);
+    expect(err.context.partial_messages).toEqual(messages);
+    const res = err.toErrorResponse();
+    expect(res.error.details?.partial_observation).toEqual({ partial_messages: messages });
+  });
+
+  it('ScriptTimeoutError caps partial messages at 50 in both places', async () => {
+    const { ScriptTimeoutError } = await import('../../src/tools/script.js');
+    const messages = Array.from({ length: 60 }, (_, i) => ({ i }));
+    const err = new ScriptTimeoutError(1000, 'sc1', messages, true);
+    expect((err.context.partial_messages as unknown[]).length).toBe(50);
+    expect(((err.details?.partial_observation as any).partial_messages as unknown[]).length).toBe(50);
+  });
+});

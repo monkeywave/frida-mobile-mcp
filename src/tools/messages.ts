@@ -2,9 +2,39 @@ import { z } from 'zod';
 import { toolOutputSchema } from '../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { getState } from '../state.js';
-import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
+import { buildResult, formatToolResponse, pagedCoverage } from '../helpers/result-builder.js';
 import { FridaMcpError } from '../helpers/errors.js';
 import { responseFormatSchema } from '../constants.js';
+import type { EvidenceMeta, ScriptEntry } from '../types.js';
+
+/**
+ * Whether maxMessageBuffer evicted messages a reader at `cursor` never saw: some script's
+ * newest evicted message is after the cursor. Returns the newest such seq, or null.
+ */
+export function findEvictionLoss(scripts: Iterable<ScriptEntry>, cursor: number): number | null {
+  const lost = Array.from(scripts, (s) => s.lastEvictedSeq ?? -1).filter((seq) => seq > cursor);
+  return lost.length > 0 ? Math.max(...lost) : null;
+}
+
+/** Coverage/limitations for one get_messages page (REA `coverage { scope, status, next_offset }`). */
+export function messagesEvidenceMeta(
+  sessionId: string,
+  nextCursor: number,
+  limitHit: boolean,
+  lastEvictedSeq: number | null,
+  maxMessageBuffer: number,
+): EvidenceMeta {
+  const evicted = lastEvictedSeq !== null;
+  return {
+    limitations: evicted
+      ? [
+          `messages before seq ${lastEvictedSeq + 1} were evicted (maxMessageBuffer=${maxMessageBuffer}); ` +
+            'raise maxMessageBuffer or poll more often',
+        ]
+      : [],
+    coverage: pagedCoverage(`session:${sessionId}`, evicted || limitHit, nextCursor),
+  };
+}
 
 export function registerMessagesTool(server: McpServer): void {
   server.registerTool(
@@ -42,9 +72,11 @@ export function registerMessagesTool(server: McpServer): void {
         const maxMessages = limit ?? 50;
         const startCursor = since ?? 0;
         let allMessages: Array<{ script_id: string; script_name?: string; index: number; seq: number; timestamp: number; type: string; payload: unknown }> = [];
+        const matchingScripts: ScriptEntry[] = [];
 
         for (const [sid, scriptEntry] of session.scripts) {
           if (script_id && sid !== script_id) continue;
+          matchingScripts.push(scriptEntry);
 
           const filtered = scriptEntry.messages
             .filter((m) => m.seq > startCursor)
@@ -92,7 +124,14 @@ export function registerMessagesTool(server: McpServer): void {
                 : []),
               { tool: 'hook_method', reason: 'Add more hooks to capture more data' },
               { tool: 'stop_instrumentation', args: { session_id }, reason: 'Clean up when done' },
-            ]
+            ],
+            messagesEvidenceMeta(
+              session_id,
+              lastIndex,
+              truncated,
+              findEvictionLoss(matchingScripts, startCursor),
+              state.config.maxMessageBuffer,
+            )
           ),
           response_format
         );

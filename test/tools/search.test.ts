@@ -102,4 +102,16 @@ describe('search_classes_and_methods MCP tool', () => {
     expect(parsed.error).toBeDefined();
     expect(parsed.error.message).toMatch(/provide target.*or session_id/i);
   });
+  it('reports partial coverage with a limitation when matches reach the limit', async () => {
+    searchResult = [{ name: 'A' }, { name: 'B' }];
+    const parsed = await callJson(client, 'search_classes_and_methods', { target: TARGET, pattern: 'Login', limit: 2 });
+    expect(parsed.coverage).toEqual({ status: 'partial', scope: 'android loaded classes matching Login', truncated: true });
+    expect(parsed.limitations).toContainEqual(expect.stringMatching(/Stopped at limit=2/));
+  });
+
+  it('reports complete coverage when matches stay below the limit', async () => {
+    const parsed = await callJson(client, 'search_classes_and_methods', { target: TARGET, pattern: 'Login', limit: 5 });
+    expect(parsed.coverage).toEqual({ status: 'complete', scope: 'android loaded classes matching Login' });
+    expect(parsed.limitations ?? []).not.toContainEqual(expect.stringMatching(/Stopped at limit/));
+  });
 });

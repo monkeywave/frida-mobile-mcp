@@ -8,6 +8,7 @@ import type { DeviceManager } from './device/manager.js';
 import { getState } from './state.js';
 import { getScriptRegistry } from './scripts/registry.js';
 import { listRecipes, getRecipe } from './recipes/registry.js';
+import { getEvidence, listEvidence } from './helpers/evidence-store.js';
 
 const cache = new Map<string, { data: unknown; expiresAt: number }>();
 
@@ -293,6 +294,35 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
           }),
         }],
       };
+    }
+  );
+
+  registerEvidenceResources(server);
+}
+
+/** Latest index rows exposed by `frida://evidence`. */
+export const EVIDENCE_RESOURCE_LIMIT = 100;
+
+function registerEvidenceResources(server: McpServer): void {
+  // Static: frida://evidence — the newest persisted tool results (index rows).
+  server.registerResource(
+    'frida-evidence-index',
+    'frida://evidence',
+    { description: `The latest ${EVIDENCE_RESOURCE_LIMIT} persisted tool results (evidence index rows, newest first)`, mimeType: 'application/json' },
+    async (uri) => ({
+      contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(listEvidence({ limit: EVIDENCE_RESOURCE_LIMIT })) }],
+    })
+  );
+
+  // Template: frida://evidence/{id} — one persisted record (same as get_evidence).
+  server.registerResource(
+    'frida-evidence-record',
+    new ResourceTemplate('frida://evidence/{id}', { list: undefined }),
+    { description: 'A persisted tool result by evidence_id: tool, redacted params, status and the structured result or error', mimeType: 'application/json' },
+    async (uri, variables) => {
+      const record = getEvidence(String(variables.id));
+      const body = record ?? { error: 'Evidence record not found' };
+      return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(body) }] };
     }
   );
 }

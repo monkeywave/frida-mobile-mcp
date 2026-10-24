@@ -7,9 +7,25 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
 import { responseFormatSchema } from '../constants.js';
+import { isToolExposed, policyFromConfig, type ExposurePolicy } from './tool-gate.js';
+import { TOOL_EFFECTS } from './effects.js';
 import type { SessionEntry, DetachRecord, HookLiveness } from '../types.js';
 
 const RECENT_DETACH_LIMIT = 5;
+
+/** Names of the known tools that `policy` keeps out of the catalog, sorted. */
+export function hiddenToolNames(policy: ExposurePolicy): string[] {
+  return Object.keys(TOOL_EFFECTS)
+    .filter((name) => !isToolExposed(name, policy))
+    .sort();
+}
+
+/** Limitation note when the tool profile / exclude list hid tools from this catalog. */
+export function hiddenToolsLimitations(hiddenTools: number): string[] | undefined {
+  return hiddenTools > 0
+    ? [`${hiddenTools} tools hidden by FRIDA_MCP_TOOL_PROFILE/FRIDA_MCP_TOOLS_EXCLUDE`]
+    : undefined;
+}
 
 export interface SessionSummary {
   id: string;
@@ -169,6 +185,10 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
           events: o.eventCount,
         }));
 
+        // The policy registerAllTools applied; the config only when nothing was recorded.
+        const hiddenNames = hiddenToolNames(state.toolExposure ?? policyFromConfig(state.config));
+        const hiddenTools = hiddenNames.length;
+
         const result = buildResult(
           {
             devices,
@@ -179,6 +199,8 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
             coverage,
             oracles,
             recent_detaches: recentDetaches,
+            hidden_tools: hiddenTools,
+            hidden_tool_names: hiddenNames,
             config: {
               custom_scripts_enabled: state.config.allowCustomScripts,
               memory_write_enabled: state.config.memoryWriteEnabled,
@@ -204,7 +226,8 @@ export function registerStatusTool(server: McpServer, deviceManager: DeviceManag
                   reason: 'No devices found - get help on setup',
                 }]
               : []),
-          ]
+          ],
+          { limitations: hiddenToolsLimitations(hiddenTools) }
         );
 
         return formatToolResponse(result, response_format);

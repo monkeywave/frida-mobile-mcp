@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../../device/manager.js';
 import { getState } from '../../state.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
-import { wrapFridaError } from '../../helpers/errors.js';
+import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
 import { responseFormatSchema } from '../../constants.js';
 
 export function registerAdvancedDeviceTools(server: McpServer, deviceManager: DeviceManager): void {
@@ -46,6 +46,8 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
         device_id: z.string().optional().describe('Device ID from list_devices'),
         type: z.enum(['usb', 'local', 'remote']).optional().describe('Device type'),
         host: z.string().optional().describe('Remote host:port for remote devices'),
+        token: z.string().optional().describe('Remote only: auth token the frida-server was started with (--token). Never echoed back.'),
+        certificate: z.string().optional().describe('Remote only: path to the PEM certificate of a TLS frida-server (--certificate)'),
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
@@ -56,12 +58,13 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
         openWorldHint: true,
       },
     },
-    async ({ device_id, type, host, response_format }) => {
+    async ({ device_id, type, host, token, certificate, response_format }) => {
       try {
         const state = getState();
-        const device = await deviceManager.resolve({ deviceId: device_id, type: type as any, host });
+        const device = await deviceManager.resolve({ deviceId: device_id, type: type as any, host, token, certificate });
         state.selectedDevice = device;
         const info = await deviceManager.getDeviceInfo(device.id);
+        // The result is built only from device info; the token/certificate never enter it.
         return formatToolResponse(buildResult({
           selected_device: info,
           message: `Device selected: ${device.name} (${device.id})`,
@@ -70,7 +73,7 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
           { tool: 'list_processes', reason: 'List running processes' },
         ]), response_format);
       } catch (err) {
-        return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
+        return formatToolResponse(wrapFridaError(maskTokenInError(err, token)).toErrorResponse(), response_format);
       }
     }
   );
@@ -108,4 +111,20 @@ export function registerAdvancedDeviceTools(server: McpServer, deviceManager: De
       }
     }
   );
+}
+
+/**
+ * frida (or a resolver error) could echo the remote auth token in its message. Mask it on the
+ * raw message string before wrapping, so it cannot reach the error message or context.
+ */
+export function maskTokenInError(err: unknown, token: string | undefined): unknown {
+  if (!token) return err;
+  const message = err instanceof Error ? err.message : String(err);
+  if (!message.includes(token)) return err;
+  const masked = message.split(token).join('***');
+  if (err instanceof FridaMcpError) {
+    err.message = masked;
+    return err;
+  }
+  return new Error(masked);
 }

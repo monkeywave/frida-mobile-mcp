@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { toolOutputSchema } from '../../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { getState } from '../../state.js';
-import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
+import { buildResult, formatToolResponse, pagedCoverage } from '../../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
 import { responseFormatSchema, type ResponseFormat } from '../../constants.js';
 import { createAgentScript } from '../../agent/script-factory.js';
@@ -260,6 +260,12 @@ function pageMeta<T>(page: AgentPage<T>): { offset: number; limit: number; trunc
   return { offset: page.offset, limit: page.limit, truncated: page.offset + page.items.length < page.total };
 }
 
+/** Offset of the next page, or undefined on the last page. */
+function nextPageOffset<T>(page: AgentPage<T>): number | undefined {
+  const nextOffset = page.offset + page.items.length;
+  return nextOffset < page.total ? nextOffset : undefined;
+}
+
 /** suggested_next entries for a list of named, addressed entries inside a module. */
 function suggestForEntry(moduleName: string, entry: { name: string } | undefined): SuggestedAction[] {
   if (!entry) return [];
@@ -305,16 +311,18 @@ async function enumerateModules(sessionId: string, filter: string | undefined): 
     { tool: 'enumerate_exports', args: { session_id: sessionId, module_name: first }, reason: 'List exports of a module' },
     { tool: 'enumerate_imports', args: { session_id: sessionId, module_name: first }, reason: 'List imports of a module' },
     { tool: 'enumerate_symbols', args: { session_id: sessionId, module_name: first }, reason: 'List debug/ELF symbols of a module (Linux/Android/iOS/macOS)' },
-  ], { coverage: { status: 'complete' } });
+  ], { coverage: { status: 'complete', scope: filter ? `loaded modules matching ${filter}` : 'loaded modules' } });
 }
 
 async function enumerateExports(sessionId: string, moduleName: string, paging: PaginationArgs): Promise<ToolResult> {
   const page = await enumerateModulePage<ExportEntry>(
     sessionId, moduleName, 'enumerate_exports', ENUMERATE_EXPORTS_SOURCE, 'Export enumeration', paging
   );
+  const pageInfo = pageMeta(page);
   return buildResult(
-    { session_id: sessionId, module: moduleName, export_count: page.total, exports: page.items, ...pageMeta(page) },
-    suggestForEntry(moduleName, page.items[0])
+    { session_id: sessionId, module: moduleName, export_count: page.total, exports: page.items, ...pageInfo },
+    suggestForEntry(moduleName, page.items[0]),
+    { coverage: pagedCoverage(`module ${moduleName} exports`, pageInfo.truncated, nextPageOffset(page)) }
   );
 }
 
@@ -326,9 +334,11 @@ async function enumerateImports(sessionId: string, moduleName: string, paging: P
   const suggestions: SuggestedAction[] = first?.module
     ? suggestForEntry(first.module, first)
     : [{ tool: 'enumerate_modules', args: { session_id: sessionId }, reason: 'Find the module that provides an import' }];
+  const pageInfo = pageMeta(page);
   return buildResult(
-    { session_id: sessionId, module: moduleName, import_count: page.total, imports: page.items, ...pageMeta(page) },
-    suggestions
+    { session_id: sessionId, module: moduleName, import_count: page.total, imports: page.items, ...pageInfo },
+    suggestions,
+    { coverage: pagedCoverage(`module ${moduleName} imports`, pageInfo.truncated, nextPageOffset(page)) }
   );
 }
 
@@ -340,9 +350,12 @@ async function enumerateSymbols(
   const page = await enumerateModulePage<SymbolEntry>(
     sessionId, moduleName, 'enumerate_symbols', ENUMERATE_SYMBOLS_SOURCE, 'Symbol enumeration', { ...paging, filter: filter ?? null }
   );
+  const pageInfo = pageMeta(page);
+  const scope = `module ${moduleName} symbols${filter ? ` matching ${filter}` : ''}`;
   return buildResult(
-    { session_id: sessionId, module: moduleName, filter: filter ?? null, symbol_count: page.total, symbols: page.items, ...pageMeta(page) },
-    suggestForEntry(moduleName, page.items[0])
+    { session_id: sessionId, module: moduleName, filter: filter ?? null, symbol_count: page.total, symbols: page.items, ...pageInfo },
+    suggestForEntry(moduleName, page.items[0]),
+    { coverage: pagedCoverage(scope, pageInfo.truncated, nextPageOffset(page)) }
   );
 }
 

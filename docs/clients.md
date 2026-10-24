@@ -17,6 +17,7 @@ The server entry is the same for every client: run `npx -y frida-mobile-mcp` and
 - [HTTP mode](#http-mode)
 - [Remote frida-server](#remote-frida-server)
 - [Version matching](#version-matching)
+- [Running next to other MCP servers](#running-next-to-other-mcp-servers)
 - [Environment variables](#environment-variables)
 
 ## Running the server
@@ -34,8 +35,12 @@ Usage: frida-mobile-mcp [options]
 
 Options:
   --device <id>            Frida device ID
+  --remote <host[:port]>   Add a remote frida-server at startup (or FRIDA_MCP_REMOTE)
+  --remote-token <token>   Auth token of that frida-server (or FRIDA_MCP_REMOTE_TOKEN)
+  --remote-cert <path>     PEM certificate of a TLS frida-server (or FRIDA_MCP_REMOTE_CERT)
   --allow-custom-scripts   Allow custom Frida script execution
   --allow-memory-write     Allow memory write operations
+  --allow-adb-shell        Allow raw adb shell commands (adb_shell)
   --no-mobile-mcp          Disable mobile-mcp integration
   --debug                  Enable debug logging
   --list-devices           Print Frida devices and exit
@@ -73,7 +78,7 @@ frida-mobile-mcp setup --client claude-code
 ```
 
 - `--client` accepts `claude-code`, `claude-desktop`, `cursor`, `vscode`, `windsurf` or `codex`.
-- `--device`, `--allow-custom-scripts` and `--allow-memory-write` are written into the entry's `env` block.
+- `--device` is written into the entry's `env` block; `--allow-custom-scripts`, `--allow-memory-write`, `--allow-native-injection` and `--allow-adb-shell` are baked into the entry's `args` as the matching server flags.
 - Existing config files are merged, not replaced; the previous file is saved next to it with a `.bak` suffix.
 - `--print` prints the entry without writing anything.
 - `codex` prints a TOML snippet to paste into `~/.codex/config.toml`.
@@ -322,6 +327,12 @@ On the device, frida-server must be told to listen on the network interface inst
 adb shell "su -c '/data/local/tmp/frida-server -l 0.0.0.0:27042 &'"
 ```
 
+A frida-server reachable over the network is open to anyone who can connect to it. Start it with an auth token (`frida-server -l 0.0.0.0:27042 --token <t>`, or `frida_server_start` with `token`) and pass the same token as `FRIDA_MCP_REMOTE_TOKEN` / `--remote-token`, or as `token` to `select_device`. For a TLS-enabled server (`--certificate`), point `FRIDA_MCP_REMOTE_CERT` / `--remote-cert` (or `select_device` `certificate`) at its PEM file. The token is never echoed in tool results.
+
+```bash
+FRIDA_MCP_REMOTE=192.168.1.5:27042 FRIDA_MCP_REMOTE_TOKEN=<t> npx -y frida-mobile-mcp
+```
+
 For a USB-tethered device you can forward the port instead of exposing it on Wi-Fi:
 
 ```bash
@@ -356,6 +367,18 @@ adb shell "su -c '/data/local/tmp/frida-server &'"
 
 On jailbroken iOS, install the Frida package whose version matches from the Frida Cydia/Sileo repository.
 
+## Running next to other MCP servers
+
+frida-mobile-mcp is meant to share a client with static-analysis servers such as REA, ReVa (Ghidra) and IDA. Register each server under its own name; `frida-mobile-mcp setup --client <name>` only adds or replaces the `frida` entry and keeps the others. To keep the combined tool catalog small, trim this server:
+
+```bash
+FRIDA_MCP_TOOL_PROFILE=core                  # core tool set only
+FRIDA_MCP_TOOLS_EXCLUDE=adb_*,frida_server_*  # hide tools another server covers
+FRIDA_MCP_SCHEMA_PROFILE=compact             # short descriptions; core + compact is 17% of the full catalog
+```
+
+`get_status` reports how many tools were hidden (`hidden_tools`). Routing rules, the REA install lines and the evidence mapping are in [rea.md](rea.md); address notation and the three-server ReVa/IDA setup are in [interop.md](interop.md).
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -363,16 +386,26 @@ On jailbroken iOS, install the Frida package whose version matches from the Frid
 | `FRIDA_DEVICE_ID` | first USB device | Device ID to use; same as `--device` |
 | `FRIDA_MCP_ALLOW_CUSTOM_SCRIPTS` | unset | `1` enables `execute_script` with arbitrary JavaScript; same as `--allow-custom-scripts` |
 | `FRIDA_MCP_MEMORY_WRITE` | unset | `1` enables `write_memory`; same as `--allow-memory-write` |
+| `FRIDA_MCP_ALLOW_NATIVE_INJECTION` | unset | `1`/`true` enables `inject_library` (native .so/.dylib injection); same as `--allow-native-injection` |
+| `FRIDA_MCP_ALLOW_ADB_SHELL` | unset | `1`/`true` enables `adb_shell` (arbitrary device shell commands); same as `--allow-adb-shell` |
 | `FRIDA_MCP_DEBUG` | unset | `1` enables debug logging on stderr; same as `--debug` |
 | `FRIDA_MCP_RUNTIME` | Script runtime override: `qjs` (default) or `v8` (Android debugging only) |
 | `FRIDA_MCP_SNAPSHOTS` | unset | `1` pre-warms a per-session V8 snapshot of the Java/ObjC bridge; same as config `snapshots`. Only effective together with `FRIDA_MCP_RUNTIME=v8` |
+| `FRIDA_MCP_EVIDENCE` | `1` | `0` stops persisting tool results to the evidence store; same as config `evidence.enabled` |
+| `FRIDA_MCP_EVIDENCE_PATH` | `~/.config/frida-mobile-mcp/evidence` | Evidence store directory (`YYYY-MM-DD/<evidence_id>.json` plus `index.jsonl`, mode 0600); same as config `evidence.path` |
+| `FRIDA_MCP_EVIDENCE_MAX_MB` | `200` | Size cap of the evidence store in MB, oldest records pruned first; same as config `evidence.maxMb` |
 | `FRITAP_VERSION` | friTap release tag to download when no local agent is found (default v2.5.2) |
+| `FRITAP_AGENT_SHA256` | Bare sha256 of the downloaded friTap agent for the selected `FRITAP_VERSION` tag. v2.5.2 is pinned built in; unpinned tags download with a warning. Not applied to `FRITAP_AGENT_PATH` or pip-installed agents |
 | `FRITAP_AGENT_PATH` | Path to a friTap fritap_agent.js bundle for capture_tls (otherwise the installed friTap Python package or a pinned download is used) |
 | `FRIDA_MCP_COMPILER_PROJECT_DIR` | Cache directory for the frida.Compiler project used to compile ES module scripts |
 | `FRIDA_MCP_BRIDGES_DIR` | Directory with prebuilt Java/ObjC bridge bundles (defaults to dist/bridges inside the package) |
-| `FRIDA_MCP_REMOTE` | unset | `host[:port]` of a frida-server to add as a remote device at startup; port defaults to `27042` |
+| `FRIDA_MCP_REMOTE` | unset | `host[:port]` of a frida-server to add as a remote device at startup; port defaults to `27042`; same as `--remote` |
+| `FRIDA_MCP_REMOTE_TOKEN` | unset | Auth token the remote frida-server was started with (`--token`); same as `--remote-token` |
+| `FRIDA_MCP_REMOTE_CERT` | unset | Path to the PEM certificate of a TLS remote frida-server (`--certificate`); same as `--remote-cert` |
 | `FRIDA_MCP_HTTP_TOKEN` | unset | Bearer token for the HTTP transport; same as `--http-token`; required when `--host` is not loopback |
 | `FRIDA_MCP_SCHEMA_PROFILE` | `full` | `compact` shortens tool schemas and descriptions for clients with small context windows |
+| `FRIDA_MCP_TOOL_PROFILE` | `full` | `core` registers only the core tool set (smaller `tools/list`, e.g. next to REA); also `--tool-profile` |
+| `FRIDA_MCP_TOOLS_EXCLUDE` | (none) | Comma-separated tool-name globs never registered, e.g. `adb_*,frida_server_*`; also `--exclude-tools` |
 | `FRIDA_MCP_MAX_RESPONSE_CHARS` | `25000` | Maximum characters in a single tool response; longer output is truncated |
 
 Persistent settings such as the device allowlist, rate limits and session timeouts live in `~/.config/frida-mobile-mcp/config.json`; see the README for the full file.

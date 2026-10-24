@@ -5,6 +5,7 @@ import {
   validateMemoryAddress,
   validateFilePath,
   validateTextInput,
+  sha256Hex,
 } from '../../src/helpers/sanitize.js';
 
 describe('validateScriptSource', () => {
@@ -167,5 +168,20 @@ describe('validateTextInput', () => {
     expect(() => validateTextInput(oversized)).toThrow(
       'Text input exceeds maximum length of 4096',
     );
+  });
+});
+
+describe('sha256Hex', () => {
+  it('returns the full 64-hex SHA-256 digest', () => {
+    expect(sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  });
+
+  it('hashes the empty string', () => {
+    expect(sha256Hex('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  });
+
+  it('hashes non-ASCII text as UTF-8', () => {
+    expect(sha256Hex('📦')).toMatch(/^[0-9a-f]{64}$/);
+    expect(sha256Hex('📦')).not.toBe(sha256Hex('?'));
   });
 });

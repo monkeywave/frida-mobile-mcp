@@ -20,6 +20,8 @@ import { responseFormatSchema } from '../../constants.js';
 import { getState } from '../../state.js';
 import { readFridaNodeVersion } from '../../cli/doctor.js';
 import {
+  assertSafeShellWord,
+  isSafeShellWord,
   createAdbContext,
   defaultAdbDeps,
   runAdb,
@@ -40,17 +42,20 @@ const START_SETTLE_MS = 1500;
 // ---------------------------------------------------------------------------
 
 /**
- * Shell-safe token guard. Device-side commands are joined into one `sh -c` string by adb, so
- * every interpolated value (remote path, process name, listen address, extra arg) must be free
- * of shell metacharacters. Allows the characters legitimately needed for paths/flags/addresses.
+ * Shell-safe token guard for non-secret values (remote path, process name, listen address,
+ * extra arg): device-side commands are joined into one `sh -c` string by adb, so they must be
+ * free of shell metacharacters. The error echoes the value; use `assertSafeShellWord` for secrets.
  */
-const SAFE_TOKEN = /^[A-Za-z0-9_@%+=:,./-]+$/;
-
 export function assertSafeToken(value: string, label: string): string {
-  if (!SAFE_TOKEN.test(value)) {
+  if (!isSafeShellWord(value)) {
     throw new FridaMcpError('INVALID_ARGUMENT', `${label} "${value}" contains characters that are not allowed in a device-side command.`);
   }
   return value;
+}
+
+/** Replace the value after `--token` so a start command can be reported without the secret. */
+export function redactTokenArg(command: string, token: string | undefined): string {
+  return token ? command.split(`--token ${token}`).join('--token ***') : command;
 }
 
 /** Map an Android `ro.product.cpu.abi` value to the frida-server release arch suffix. */
@@ -84,11 +89,14 @@ export function buildStartCommand(opts: {
   port: number;
   extraArgs: string[];
   useSu: boolean;
+  /** Auth token clients must present (`frida-server --token`). */
+  token?: string;
 }): string {
   assertSafeToken(opts.remotePath, 'remote_path');
   assertSafeToken(opts.listenAddress, 'listen_address');
   for (const arg of opts.extraArgs) assertSafeToken(arg, 'extra_args entry');
-  const argv = [opts.remotePath, '-l', `${opts.listenAddress}:${opts.port}`, '-D', ...opts.extraArgs].join(' ');
+  const tokenArgs = opts.token ? ['--token', assertSafeShellWord(opts.token, 'token')] : [];
+  const argv = [opts.remotePath, '-l', `${opts.listenAddress}:${opts.port}`, '-D', ...tokenArgs, ...opts.extraArgs].join(' ');
   return opts.useSu ? `su -c '${argv}'` : argv;
 }
 
@@ -204,7 +212,7 @@ export async function fridaServerInstall(
 
 export async function fridaServerStart(
   ctx: ServerOpContext,
-  params: { remotePath: string; listenAddress: string; port: number; extraArgs: string[]; useSu: boolean; processName: string },
+  params: { remotePath: string; listenAddress: string; port: number; extraArgs: string[]; useSu: boolean; processName: string; token?: string },
   sleep: (ms: number) => Promise<void> = defaultSleep,
 ): Promise<{ started: boolean; pids: number[]; command: string }> {
   const command = buildStartCommand(params);
@@ -215,7 +223,7 @@ export async function fridaServerStart(
   if (pids.length === 0) {
     throw new FridaMcpError('FRIDA_ERROR', `frida-server did not come up after start. Check that ${params.remotePath} exists and the device is rooted (useSu=${params.useSu}).`);
   }
-  return { started: true, pids, command };
+  return { started: true, pids, command: redactTokenArg(command, params.token) };
 }
 
 export async function fridaServerStop(
@@ -308,12 +316,13 @@ export function registerFridaServerTools(server: McpServer, deps: AdbExecDeps = 
         port: z.number().int().default(DEFAULT_PORT).describe('Port to listen on (use a non-default port to evade :27042 scans).'),
         use_su: z.boolean().default(true).describe('Launch via `su -c` (needed on production-rooted devices; set false on userdebug/emulator adb-root).'),
         extra_args: z.array(z.string()).default([]).describe('Additional frida-server CLI arguments.'),
+        token: z.string().optional().describe('Require this auth token from clients (frida-server --token). Recommended with listen_address 0.0.0.0; connect with select_device token / FRIDA_MCP_REMOTE_TOKEN. Redacted in the result.'),
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ device, remote_path, process_name, listen_address, port, use_su, extra_args, response_format }) => {
+    async ({ device, remote_path, process_name, listen_address, port, use_su, extra_args, token, response_format }) => {
       try {
         const result = await fridaServerStart(await context(device), {
           remotePath: remote_path,
@@ -322,6 +331,7 @@ export function registerFridaServerTools(server: McpServer, deps: AdbExecDeps = 
           extraArgs: extra_args,
           useSu: use_su,
           processName: process_name,
+          token,
         });
         return formatToolResponse(buildResult({ start: result }, [
           { tool: 'list_devices', reason: 'Confirm Frida now sees the device' },

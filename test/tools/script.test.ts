@@ -1,6 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import type frida from 'frida';
+import { initState, getState } from '../../src/state.js';
+import { rateLimiter } from '../../src/helpers/rate-limiter.js';
+import { sha256Hex } from '../../src/helpers/sanitize.js';
 import {
+  callJson,
+  makeMcpHarness,
+  makeScriptingSetup,
+  TEST_CONFIG,
+  TARGET,
+  type McpHarness,
+} from '../helpers/mock-fixtures.js';
+import {
+  registerScriptTool,
   detectSourceKind,
   resolveTimeoutMs,
   runGuarded,
@@ -127,5 +139,37 @@ describe('runGuarded', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('execute_script provenance', () => {
+  let client: McpHarness['client'];
+  let close: McpHarness['close'];
+
+  beforeAll(async () => {
+    const setup = makeScriptingSetup();
+    ({ client, close } = await makeMcpHarness((server) => registerScriptTool(server, setup.deviceManager)));
+  });
+
+  afterAll(async () => {
+    await close();
+    getState().stopCleanupTimer();
+  });
+
+  beforeEach(() => {
+    initState({ ...TEST_CONFIG, allowCustomScripts: true });
+    rateLimiter.reset();
+  });
+
+  it('reports the full source_sha256 of the user source next to the legacy script_hash', async () => {
+    const parsed = await callJson(client, 'execute_script', { target: TARGET, source: CLASSIC });
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.result.source_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsed.result.source_sha256).toBe(sha256Hex(CLASSIC));
+    // Legacy 16-hex script_hash is unchanged and is a prefix of the full digest.
+    expect(parsed.result.script_hash).toBe(sha256Hex(CLASSIC).slice(0, 16));
+    const entry = getState().getSession(parsed.result.session_id)!.scripts.get(parsed.result.script_id)!;
+    expect(entry.sourceSha256).toBe(parsed.result.source_sha256);
   });
 });

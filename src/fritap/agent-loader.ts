@@ -12,6 +12,11 @@
  *   3. ~/.config/frida-mobile-mcp/fritap/<version>/fritap_agent.js (cache)
  *   4. download from GitHub (only when allowDownload is true)
  *
+ * Integrity: when a sha256 pin exists for the tag (built-in PINNED_AGENT_SHA256 or
+ * FRITAP_AGENT_SHA256), both the cached bundle (3) and a download (4) are verified against it;
+ * a mismatching cache entry is ignored and re-downloaded. FRITAP_AGENT_PATH (1) and the pip
+ * package (2) are local, user-chosen sources and are trusted as-is (not verified).
+ *
  * Handshake (what friTap's Python side does, see ssl_logger_core / legacy/message_handler):
  * the agent drives the configuration itself during script.load(). It calls
  * `send("config_batch")` and blocks in `recv("config_batch").wait()`, then `send("anti")`
@@ -27,8 +32,10 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import type frida from 'frida';
 import { FRIDA_COMPILE_BUNDLE_MARKER } from '../agent/script-factory.js';
+import { sha256Hex } from '../helpers/sanitize.js';
 import { FritapAgentUnavailableError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
+import { PINNED_AGENT_SHA256 } from './constants.js';
 
 export const DEFAULT_FRITAP_VERSION = 'v2.5.2';
 export const FRITAP_AGENT_FILENAME = 'fritap_agent.js';
@@ -92,7 +99,7 @@ export async function locateFritapAgent(options: LocateOptions = {}): Promise<Lo
 
   const cacheDir = options.cacheDir ?? fritapCacheDir(version, env);
   const cachedPath = path.join(cacheDir, FRITAP_AGENT_FILENAME);
-  const fromCache = readBundle(cachedPath, version, 'cache', searched);
+  const fromCache = loadFromCache(cachedPath, version, env, searched);
   if (fromCache) return fromCache;
 
   if (!options.allowDownload) {
@@ -101,7 +108,7 @@ export async function locateFritapAgent(options: LocateOptions = {}): Promise<Lo
       searched
     );
   }
-  return downloadBundle(version, cachedPath, options.fetchImpl ?? fetch, searched);
+  return downloadBundle(version, cachedPath, options.fetchImpl ?? fetch, searched, env);
 }
 
 function loadFromEnv(env: NodeJS.ProcessEnv, searched: string[]): LocatedFritapAgent | null {
@@ -145,11 +152,24 @@ function readBundle(file: string, version: string, origin: FritapAgentOrigin, se
   return { path: file, source, version, origin };
 }
 
+/** The cached bundle, or null when absent or when it does not match the tag's sha256 pin. */
+function loadFromCache(cachedPath: string, version: string, env: NodeJS.ProcessEnv, searched: string[]): LocatedFritapAgent | null {
+  const bundle = readBundle(cachedPath, version, 'cache', searched);
+  if (!bundle) return null;
+  const expected = expectedAgentSha256(version, env);
+  if (!expected) return bundle;
+  const actual = sha256Hex(bundle.source);
+  if (actual === expected) return bundle;
+  log('warn', `Ignoring cached friTap agent ${cachedPath}: sha256 ${actual} does not match the pin ${expected}`);
+  return null;
+}
+
 async function downloadBundle(
   version: string,
   cachedPath: string,
   fetchImpl: typeof fetch,
-  searched: string[]
+  searched: string[],
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<LocatedFritapAgent> {
   const url = fritapDownloadUrl(version);
   log('info', `Downloading friTap agent ${version} from ${url}`);
@@ -166,9 +186,36 @@ async function downloadBundle(
   if (!isValidFritapBundle(source)) {
     throw new FritapAgentUnavailableError(`downloaded file from ${url} is not a frida-compile bundle`, searched);
   }
+  verifyDownloadedBundle(source, version, url, env, searched);
   mkdirSync(path.dirname(cachedPath), { recursive: true });
   writeFileSync(cachedPath, source, 'utf8');
   return { path: cachedPath, source, version, origin: 'download' };
+}
+
+/**
+ * Expected sha256 for a tag: a bare `FRITAP_AGENT_SHA256` hash applies to the selected
+ * `FRITAP_VERSION` tag and overrides the built-in PINNED_AGENT_SHA256 map. Null when nothing is pinned.
+ */
+export function expectedAgentSha256(version: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const override = env.FRITAP_AGENT_SHA256?.trim().toLowerCase();
+  if (override) return override;
+  return PINNED_AGENT_SHA256[version]?.toLowerCase() ?? null;
+}
+
+/** Reject a downloaded bundle whose sha256 differs from the pin; warn when no pin exists. Nothing is cached on rejection. */
+function verifyDownloadedBundle(source: string, version: string, url: string, env: NodeJS.ProcessEnv, searched: string[]): void {
+  const expected = expectedAgentSha256(version, env);
+  if (!expected) {
+    log('warn', `No sha256 pin for friTap agent ${version}; accepting the download unverified. Set FRITAP_AGENT_SHA256 to pin it.`);
+    return;
+  }
+  const actual = sha256Hex(source);
+  if (actual === expected) return;
+  throw new FritapAgentUnavailableError(
+    `sha256 mismatch for ${url}: expected ${expected}, got ${actual}. The download was discarded. ` +
+      'If you trust this build, set FRITAP_AGENT_SHA256 to the new hash; otherwise use FRITAP_AGENT_PATH or pip install friTap.',
+    searched
+  );
 }
 
 /** Directory of the installed friTap Python package, or null when it cannot be imported. */

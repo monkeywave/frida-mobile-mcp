@@ -3,7 +3,7 @@
   "name": "io.github.monkeywave/frida-mobile-mcp",
   "title": "Frida Mobile MCP",
   "description": "Mobile Frida MCP Server - AI-powered mobile app exploration and testing via Frida instrumentation",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "websiteUrl": "https://github.com/monkeywave/frida-mobile-mcp",
   "repository": {
     "url": "https://github.com/monkeywave/frida-mobile-mcp",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "frida-mobile-mcp",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -49,8 +49,77 @@
           "default": "0"
         },
         {
+          "name": "FRIDA_MCP_ALLOW_NATIVE_INJECTION",
+          "description": "Set to \"1\" to enable the inject_library tool (loads a native .so/.dylib into the target via Frida's injector). Disabled by default.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "0"
+        },
+        {
+          "name": "FRIDA_MCP_ALLOW_ADB_SHELL",
+          "description": "Set to \"1\" to enable the adb_shell tool (arbitrary shell commands on an Android device via adb). Disabled by default.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "0"
+        },
+        {
+          "name": "FRIDA_MCP_SNAPSHOTS",
+          "description": "Set to \"1\" to use V8 script-runtime snapshots to speed up repeated script loads (requires FRIDA_MCP_RUNTIME=v8). Disabled by default.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "0"
+        },
+        {
+          "name": "FRIDA_MCP_EVIDENCE",
+          "description": "Set to \"0\" to stop persisting every tool result (params, status, structured result) to the evidence store; \"1\" forces it on. Enabled by default.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "0",
+            "1"
+          ],
+          "default": "1"
+        },
+        {
+          "name": "FRIDA_MCP_EVIDENCE_PATH",
+          "description": "Directory of the evidence store (records at <path>/YYYY-MM-DD/<evidence_id>.json plus index.jsonl, mode 0600). Defaults to ~/.config/frida-mobile-mcp/evidence.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRIDA_MCP_EVIDENCE_MAX_MB",
+          "description": "Size cap of the evidence store in MB; oldest records are pruned beyond it. Defaults to 200.",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "200"
+        },
+        {
           "name": "FRIDA_MCP_REMOTE",
           "description": "host[:port] of a remote frida-server to add as a remote device at startup (port defaults to 27042).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRIDA_MCP_REMOTE_TOKEN",
+          "description": "Auth token of the remote frida-server in FRIDA_MCP_REMOTE (frida-server --token).",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "FRIDA_MCP_REMOTE_CERT",
+          "description": "Path to the PEM certificate of a TLS remote frida-server in FRIDA_MCP_REMOTE (frida-server --certificate).",
           "isRequired": false,
           "isSecret": false
         },
@@ -64,6 +133,23 @@
             "compact"
           ],
           "default": "full"
+        },
+        {
+          "name": "FRIDA_MCP_TOOL_PROFILE",
+          "description": "Tool exposure profile. \"core\" registers only 32 core tools to keep the tool catalog small next to other MCP servers.",
+          "isRequired": false,
+          "isSecret": false,
+          "choices": [
+            "full",
+            "core"
+          ],
+          "default": "full"
+        },
+        {
+          "name": "FRIDA_MCP_TOOLS_EXCLUDE",
+          "description": "Comma-separated tool-name globs that are never registered, e.g. \"adb_*,frida_server_*\".",
+          "isRequired": false,
+          "isSecret": false
         },
         {
           "name": "FRIDA_MCP_MAX_RESPONSE_CHARS",
@@ -121,6 +207,12 @@
         {
           "name": "FRITAP_VERSION",
           "description": "friTap release tag to download when no local agent is found (default v2.5.2)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "FRITAP_AGENT_SHA256",
+          "description": "Bare sha256 of the downloaded friTap agent for the selected FRITAP_VERSION tag. v2.5.2 is pinned in the package; set this for other tags.",
           "isRequired": false,
           "isSecret": false
         }

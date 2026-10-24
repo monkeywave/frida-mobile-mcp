@@ -178,9 +178,15 @@ async function snapshotFor(opts: AgentScriptOptions, bridges: BridgeName[], runt
   return getOrCreateSessionSnapshot(opts.sessionEntry, { platform: opts.platform, bridges, runtime });
 }
 
-/** Compose and create (but do not load) a script on the given session. */
-export async function createAgentScript(session: frida.Session, opts: AgentScriptOptions): Promise<frida.Script> {
-  const composed = composeAgentSource(opts);
+/**
+ * Compose and create (but do not load) a script on the given session. Pass `composed` when the
+ * caller already composed `opts` (e.g. to hash the source) so it is not composed twice.
+ */
+export async function createAgentScript(
+  session: frida.Session,
+  opts: AgentScriptOptions,
+  composed: ComposedAgentSource = composeAgentSource(opts),
+): Promise<frida.Script> {
   const runtime = resolveScriptRuntime(opts.runtime);
   const scriptOptions: frida.ScriptOptions = { name: composed.name };
   if (runtime !== 'default') {

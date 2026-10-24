@@ -26,6 +26,7 @@ export interface SetupOptions {
   allowCustomScripts?: boolean;
   allowMemoryWrite?: boolean;
   allowNativeInjection?: boolean;
+  allowAdbShell?: boolean;
   print?: boolean;
 }
 
@@ -65,7 +66,7 @@ type JsonObject = Record<string, unknown>;
 // ---------------------------------------------------------------------------
 
 export function buildServerEntry(
-  opts: Pick<SetupOptions, 'device' | 'allowCustomScripts' | 'allowMemoryWrite' | 'allowNativeInjection'>,
+  opts: Pick<SetupOptions, 'device' | 'allowCustomScripts' | 'allowMemoryWrite' | 'allowNativeInjection' | 'allowAdbShell'>,
 ): ServerEntry {
   const entry: ServerEntry = { command: 'npx', args: ['-y', PACKAGE_NAME, ...permissionFlags(opts)] };
   if (opts.device) {
@@ -74,11 +75,12 @@ export function buildServerEntry(
   return entry;
 }
 
-function permissionFlags(opts: Pick<SetupOptions, 'allowCustomScripts' | 'allowMemoryWrite' | 'allowNativeInjection'>): string[] {
+function permissionFlags(opts: Pick<SetupOptions, 'allowCustomScripts' | 'allowMemoryWrite' | 'allowNativeInjection' | 'allowAdbShell'>): string[] {
   const flags: string[] = [];
   if (opts.allowCustomScripts) flags.push('--allow-custom-scripts');
   if (opts.allowMemoryWrite) flags.push('--allow-memory-write');
   if (opts.allowNativeInjection) flags.push('--allow-native-injection');
+  if (opts.allowAdbShell) flags.push('--allow-adb-shell');
   return flags;
 }
 

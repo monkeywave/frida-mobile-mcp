@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getScriptRegistry } from '../../src/scripts/registry.js';
-import { summarizeSession, summarizeRecentDetaches, summarizeHookLiveness } from '../../src/tools/status.js';
+import { summarizeSession, summarizeRecentDetaches, summarizeHookLiveness, hiddenToolsLimitations, hiddenToolNames } from '../../src/tools/status.js';
 import type { SessionEntry, DetachRecord } from '../../src/types.js';
 
 // Test the structural aspects we can verify without mocking Frida
@@ -124,5 +124,32 @@ describe('summarizeHookLiveness', () => {
     expect(summarizeHookLiveness({
       installed: false, classResolved: true, reason: 'OVERLOAD_MISMATCH', availableOverloads: ['f(byte[])'], firstSeenTs: null,
     })).toEqual({ installed: false, fired: false, class_resolved: true, reason: 'OVERLOAD_MISMATCH', available_overloads: ['f(byte[])'] });
+  });
+});
+
+describe('hiddenToolsLimitations', () => {
+  it('is undefined when no tool was hidden', () => {
+    expect(hiddenToolsLimitations(0)).toBeUndefined();
+  });
+
+  it('names the env vars when tools were hidden', () => {
+    expect(hiddenToolsLimitations(12)).toEqual(['12 tools hidden by FRIDA_MCP_TOOL_PROFILE/FRIDA_MCP_TOOLS_EXCLUDE']);
+  });
+});
+
+describe('hiddenToolNames', () => {
+  it('is empty for the full profile without excludes', () => {
+    expect(hiddenToolNames({ toolProfile: 'full', toolsExclude: [] })).toEqual([]);
+  });
+
+  it('lists excluded tools sorted', () => {
+    const hidden = hiddenToolNames({ toolProfile: 'full', toolsExclude: ['adb_*'] });
+    expect(hidden.length).toBeGreaterThan(0);
+    expect(hidden.every((n) => n.startsWith('adb_'))).toBe(true);
+    expect(hidden).toEqual([...hidden].sort());
+  });
+
+  it('hides non-core tools under the core profile', () => {
+    expect(hiddenToolNames({ toolProfile: 'core', toolsExclude: [] })).toContain('adb_shell');
   });
 });

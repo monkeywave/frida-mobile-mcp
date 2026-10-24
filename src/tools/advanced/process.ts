@@ -3,7 +3,7 @@ import { toolOutputSchema } from '../../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../../device/manager.js';
 import { getState } from '../../state.js';
-import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
+import { buildResult, formatToolResponse, pagedCoverage } from '../../helpers/result-builder.js';
 import { wrapFridaError } from '../../helpers/errors.js';
 import { responseFormatSchema } from '../../constants.js';
 
@@ -35,16 +35,21 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
 
         const processes = await device.enumerateProcesses();
         const processList = processes.map((p) => ({ pid: p.pid, name: p.name }));
+        const truncated = processList.length > 200;
 
         return formatToolResponse(buildResult({
           device: device.name,
           process_count: processList.length,
           processes: processList.slice(0, 200),
-          truncated: processList.length > 200,
+          truncated,
         }, [
           { tool: 'attach_process', reason: 'Attach to a specific process' },
           { tool: 'list_applications', reason: 'List installed applications instead' },
-        ]), response_format);
+        ], {
+          // list_processes has no offset parameter, so a truncated list has no next_offset.
+          limitations: truncated ? [`Showing 200 of ${processList.length} processes.`] : undefined,
+          coverage: pagedCoverage('running processes', truncated),
+        }), response_format);
       } catch (err) {
         return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
@@ -89,7 +94,7 @@ export function registerAdvancedProcessTools(server: McpServer, deviceManager: D
           applications: appList,
         }, [
           { tool: 'explore_app', reason: 'Explore a specific app' },
-        ]), response_format);
+        ], { coverage: { status: 'complete', scope: 'installed applications' } }), response_format);
       } catch (err) {
         return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }

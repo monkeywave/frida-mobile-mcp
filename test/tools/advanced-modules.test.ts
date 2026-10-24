@@ -169,4 +169,33 @@ describe('advanced module tools', () => {
       expect(hoisted.createAgentScript).not.toHaveBeenCalled();
     });
   });
+  describe('coverage', () => {
+    const SSL_READ = { type: 'function', name: 'SSL_read', address: '0x1100' };
+    const SSL_WRITE = { type: 'function', name: 'SSL_write', address: '0x1200' };
+
+    const SSL_NEW = { name: 'SSL_new', type: 'function', isGlobal: true, address: '0x1200' };
+    const partial = (scope: string, next_offset: number) => ({ status: 'partial', scope, next_offset, truncated: true });
+    const complete = (scope: string) => ({ status: 'complete', scope });
+
+    it.each([
+      ['enumerate_modules: complete', MODULES, 'enumerate_modules', {}, complete('loaded modules')],
+      ['enumerate_exports: partial while short of the total', page([SSL_READ, SSL_WRITE], 5, 1, 2),
+        'enumerate_exports', { module_name: 'libssl.so', offset: 1, limit: 2 }, partial('module libssl.so exports', 3)],
+      ['enumerate_exports: complete on the last page', page([SSL_READ, SSL_WRITE], 5, 3, 2),
+        'enumerate_exports', { module_name: 'libssl.so', offset: 3, limit: 2 }, complete('module libssl.so exports')],
+      ['enumerate_imports: partial while more remain', page([{ name: 'memcpy', module: 'libc.so', address: '0x3100' }], 3, 0, 1),
+        'enumerate_imports', { module_name: 'libssl.so', limit: 1 }, partial('module libssl.so imports', 1)],
+      ['enumerate_symbols: filter-scoped, complete on the last page', page([SSL_NEW], 1),
+        'enumerate_symbols', { module_name: 'libssl.so', filter: 'SSL_' }, complete('module libssl.so symbols matching SSL_')],
+      ['enumerate_symbols: partial while more remain', page([SSL_NEW], 4, 2, 1),
+        'enumerate_symbols', { module_name: 'libssl.so', offset: 2, limit: 1 }, partial('module libssl.so symbols', 3)],
+    ] as const)('%s', async (_label, agentResult, tool, args, coverage) => {
+      seed();
+      hoisted.runResult.value = agentResult;
+
+      const body = await callJson(harness.client, tool, { session_id: DEFAULT_SESSION_ID, ...args });
+
+      expect(body.coverage).toEqual(coverage);
+    });
+  });
 });

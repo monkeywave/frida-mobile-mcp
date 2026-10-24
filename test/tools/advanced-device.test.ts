@@ -81,6 +81,64 @@ describe('advanced device tools', () => {
       expect(body.error.code).toBe('DEVICE_NOT_FOUND');
       expect(body.error.context.requested_device).toBe('dev9');
     });
+
+    it('forwards remote token and certificate to the device manager', async () => {
+      await callJson(harness.client, 'select_device', {
+        type: 'remote', host: '10.0.0.5:27042', token: 's3cret-token', certificate: '/tmp/server.pem',
+      });
+
+      expect(deviceManager.resolve).toHaveBeenCalledWith({
+        deviceId: undefined, type: 'remote', host: '10.0.0.5:27042', token: 's3cret-token', certificate: '/tmp/server.pem',
+      });
+    });
+
+    it('never echoes the token or certificate in the result', async () => {
+      const body = await callJson(harness.client, 'select_device', {
+        type: 'remote', host: 'h:1', token: 's3cret-token', certificate: '/tmp/server.pem',
+      });
+
+      expect(body.result.selected_device).toEqual(DEVICE_INFO);
+      expect(JSON.stringify(body)).not.toContain('s3cret-token');
+      expect(JSON.stringify(body)).not.toContain('/tmp/server.pem');
+    });
+
+    it('masks a token containing a quote without leaking it or breaking the response', async () => {
+      const token = 'ab"cd';
+      deviceManager.resolve.mockRejectedValue(new Error(`auth failed for token ${token}`));
+
+      const body = await callJson(harness.client, 'select_device', { type: 'remote', host: 'h:1', token });
+
+      expect(body.error.message).toBe('auth failed for token ***');
+      expect(JSON.stringify(body)).not.toContain('ab\\"cd');
+      expect(JSON.stringify(body.error)).not.toContain(token);
+    });
+
+    it('does not mangle other error fields when a short token occurs in them', async () => {
+      deviceManager.resolve.mockRejectedValue(new Error('connection refused'));
+
+      const body = await callJson(harness.client, 'select_device', { type: 'remote', host: 'h:1', token: 'ERROR' });
+
+      expect(body.error.code).toBe('FRIDA_ERROR');
+      expect(body.error.message).toBe('connection refused');
+    });
+
+    it('masks the token in a FridaMcpError message and keeps its code', async () => {
+      deviceManager.resolve.mockRejectedValue(new DeviceNotFoundError('socket@s3cret-token'));
+
+      const body = await callJson(harness.client, 'select_device', { type: 'remote', host: 'h:1', token: 's3cret-token' });
+
+      expect(body.error.code).toBe('DEVICE_NOT_FOUND');
+      expect(body.error.message).not.toContain('s3cret-token');
+    });
+
+    it('redacts the token from error messages', async () => {
+      deviceManager.resolve.mockRejectedValue(new Error('auth failed for token s3cret-token'));
+
+      const body = await callJson(harness.client, 'select_device', { type: 'remote', host: 'h:1', token: 's3cret-token' });
+
+      expect(body.error).toBeDefined();
+      expect(JSON.stringify(body)).not.toContain('s3cret-token');
+    });
   });
 
   describe('get_device_info', () => {

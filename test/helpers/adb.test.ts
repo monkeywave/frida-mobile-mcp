@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAllowedSerial, requireAdbPath, type AdbExecDeps } from '../../src/helpers/adb.js';
+import { assertSafeShellWord, isSafeShellWord, resolveAllowedSerial, requireAdbPath, type AdbExecDeps } from '../../src/helpers/adb.js';
 
 function depsWith(devicesStdout: string, adbFound = true): AdbExecDeps {
   return {
@@ -11,6 +11,28 @@ function depsWith(devicesStdout: string, adbFound = true): AdbExecDeps {
 const TWO_DEVICES = 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n';
 const ONE_DEVICE = 'List of devices attached\nemulator-5554\tdevice\n';
 const UNAUTHORIZED = 'List of devices attached\nemulator-5554\tunauthorized\n';
+
+describe('assertSafeShellWord', () => {
+  it('accepts path, address and flag characters', () => {
+    for (const ok of ['/data/local/tmp/frida-server', '127.0.0.1:27042', '/data/app/x==/pkg-y==/base.apk', '--verbose', 'TERM']) {
+      expect(assertSafeShellWord(ok, 'x')).toBe(ok);
+    }
+  });
+
+  it('rejects ~ (an unquoted leading ~ is tilde-expanded by the device shell)', () => {
+    for (const bad of ['~', '~/frida-server', '~root/x', '/data/app/~~x==/base.apk']) {
+      expect(isSafeShellWord(bad), bad).toBe(false);
+    }
+  });
+
+  it('rejects shell metacharacters without echoing the value', () => {
+    for (const bad of ['a; rm -rf /', '/tmp/x$(id)', 'a b', '`id`', "x'y", 'x|y', '']) {
+      expect(isSafeShellWord(bad)).toBe(false);
+      expect(() => assertSafeShellWord(bad, 'token')).toThrow(expect.objectContaining({ code: 'INVALID_ARGUMENT' }));
+    }
+    expect(() => assertSafeShellWord('s3cret$(id)', 'token')).toThrow(/^token contains characters that are not allowed/);
+  });
+});
 
 describe('requireAdbPath', () => {
   it('throws a DEVICE_NOT_FOUND error when adb is absent', async () => {

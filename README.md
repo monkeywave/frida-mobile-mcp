@@ -1,11 +1,12 @@
 # frida-mobile-mcp
 
 [![npm](https://img.shields.io/npm/v/frida-mobile-mcp.svg)](https://www.npmjs.com/package/frida-mobile-mcp)
+[![skills.sh](https://skills.sh/b/monkeywave/frida-mobile-mcp)](https://skills.sh/monkeywave/frida-mobile-mcp/mobile-dynamic-analysis)
 [![CI](https://github.com/monkeywave/frida-mobile-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/monkeywave/frida-mobile-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node >=22.12](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen.svg)](package.json)
 
-An MCP server that gives AI agents dynamic instrumentation of Android and iOS apps through Frida 17. It exposes 45 tools: high-level ones that manage devices, sessions and scripts for you (explore an app, hook a Java/ObjC/native method, trace calls, map reachability coverage and autonomously drive the UI toward it, find secrets in memory and turn them into reusable friTap patterns, cast a wide net over crypto, bypass SSL pinning, capture TLS keys and plaintext with friTap, run prebuilt analysis scripts, validate custom scripts) and low-level primitives (spawn/attach, module and symbol enumeration, address resolution, control-flow analysis, memory dumps). Addresses use the same `module+0xoffset` notation as Ghidra/IDA so results move between static and dynamic tools without conversion, and every result carries an evidence envelope (`evidence_id`, `limitations`, `coverage`). Optional UI automation goes through [mobile-mcp](https://github.com/mobile-next/mobile-mcp).
+An MCP server that gives AI agents dynamic instrumentation of Android and iOS apps through Frida 17, and runs next to REA, ReVa (Ghidra) and IDA MCP servers. It exposes 71 tools: high-level ones that manage devices, sessions and scripts for you (explore an app, hook a Java/ObjC/native method, trace calls, map reachability coverage and autonomously drive the UI toward it, find secrets in memory and turn them into reusable friTap patterns, cast a wide net over crypto, bypass SSL pinning, capture TLS keys and plaintext with friTap, run prebuilt analysis scripts, validate custom scripts) and low-level primitives (spawn/attach, module and symbol enumeration, address resolution, control-flow analysis, memory dumps). Addresses use the same `module+0xoffset` notation as Ghidra/IDA so results move between static and dynamic tools without conversion, and every result carries an evidence envelope (`evidence_id`, `limitations`, `coverage`). Optional UI automation goes through [mobile-mcp](https://github.com/mobile-next/mobile-mcp).
 
 ## Quick start
 
@@ -70,9 +71,10 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | Tool | Description |
 |------|-------------|
 | `get_status` | Connected devices, active sessions (platform, script count, last activity), hooks, traces and recent detaches/crashes. Run first and after a session is lost. |
-| `frida_help` | Topic help: overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, evasion, script_catalog, script_api, recipes. |
+| `frida_help` | Topic help: overview, hooking, tracing, memory, scripts, native, tls, mobile, examples, advanced, evasion, script_catalog, script_api, recipes, interop. |
 | `detect_app_technologies` | Fingerprint libraries, frameworks and security mechanisms; returns recommended script targets. |
 | `explore_app` | Spawn an app suspended, instrument, resume; returns pid, platform, modules and a filtered class list. |
+| `get_app_info` | Identify the installed artifact: version, SDK levels, debuggable, installer and every APK (base + splits) with on-device sha256/size; `pull_to` pulls and hash-verifies them for a static tool such as REA `inspect_android_package`. iOS: Frida app parameters only. |
 | `search_classes_and_methods` | Regex search over classes (and methods with `include_methods`) in a running app. |
 | `describe_class` | Full shape of one loaded class: every method overload with parameter/return types and a hook-ready `signature`, constructors, fields, superclass/interfaces (ObjC: selectors with type encodings). Feed a signature to `hook_method` `evidence: {class, signature}`. |
 | `discover_crypto` | Find where an app does crypto (or any API family) without assuming `javax.crypto`: ranked candidate hook targets across Java/ObjC classes and native symbols. |
@@ -87,13 +89,15 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `trace_method` | frida-trace style tracing of glob patterns (`com.example.net.*`, `-[NSURL*]`, `libssl.so!SSL_*`) for a duration. |
 | `execute_script` | Run a custom script: classic JS (bridges injected), ES module JS/TS (compiled with the Frida Compiler) or a frida-compile bundle. `timeout_ms` bounds the initial run. Requires `allowCustomScripts`. |
 | `validate_script` | Syntax, type and Frida 17 removed-API check without a device. Use before `execute_script`. |
-| `run_prebuilt_script` | Run one of the 8 prebuilt scripts below; call without `script_name` to list them. |
+| `run_prebuilt_script` | Run one of the 9 prebuilt scripts below; call without `script_name` to list them. |
 | `bypass_ssl_pinning` | One-click pinning bypass (Android: TrustManager, OkHttp CertificatePinner, Conscrypt; iOS: SecTrust, ATS, BoringSSL). |
 | `capture_tls` | friTap: TLS session keys (NSS key log) and optional decrypted plaintext / synthetic pcap for OpenSSL/BoringSSL, Conscrypt, NSS, GnuTLS, wolfSSL, mbedTLS, Secure Transport and more. Accepts friTap `patterns`/`offsets` (e.g. from `generate_memory_pattern` or BoringSecretHunter) for stripped libraries. |
 | `read_memory` | Read up to 4 MB at any address notation; returns hex plus absolute address and `module+offset`. |
 | `write_memory` | Write hex bytes to memory. Disabled unless `memoryWriteEnabled`. |
 | `scan_memory` | Byte-pattern scan (`48 89 5c 24 ?? 57`), optionally limited to a module. |
 | `get_messages` | Buffered hook invocations, trace hits, `send()` output and errors; `since` paginates. |
+| `get_evidence` | Re-read a persisted tool result (params, status, structured result) by `evidence_id`. |
+| `export_evidence_bundle` | Export persisted results as a JSON or Markdown bundle, inline or to a file. |
 | `stop_instrumentation` | Remove all hooks, scripts and traces on a target and detach. |
 | `unload_script` | Unload a single script (hook, trace or custom) from a session while keeping it attached. |
 | `mobile_action` | Gateway to mobile-mcp UI automation (screenshot, elements, tap, swipe, type, launch app, list apps). |
@@ -146,7 +150,7 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 
 `mobile_action({ action, params })` forwards to a lazily spawned mobile-mcp process (`npx -y @mobilenext/mobile-mcp@latest` by default, configurable via `mobileMcp`, disabled with `--no-mobile-mcp`). Call it without `action` to list the available actions. All Frida tools work without it; when it cannot start the error is `MOBILE_MCP_UNAVAILABLE`.
 
-The server also exposes `frida://` resources (version, devices, processes, apps, sessions, messages, script catalog) and three workflow prompts (`explore_app`, `security_audit`, `trace_functionality`).
+The server also exposes `frida://` resources (version, devices, processes, apps, sessions, messages, script catalog, persisted evidence via `frida://evidence` and `frida://evidence/{id}`) and five workflow prompts (`explore_app`, `security_audit`, `trace_functionality`, `write_frida_script`, `hunt_secrets`).
 
 ## Prebuilt scripts
 
@@ -175,11 +179,13 @@ Every tool that takes or returns a native address uses one vocabulary:
 
 Results prefer `module+0xoffset` so a static tool can decompile at image base + offset; absolute addresses appear only outside known modules and come with a `limitations` entry.
 
-Every successful call returns `result`, `evidence_id` (UUID, also written to the audit log), `limitations[]`, `coverage` (`complete` | `unknown`), `session_context` and `suggested_next`. Errors carry `code`, `category`, `retryable`, `remediation` and `recovery_actions`. Field semantics and the error-code table are in [docs/interop.md](docs/interop.md); the agent workflow around them is in [skills/mobile-dynamic-analysis/SKILL.md](skills/mobile-dynamic-analysis/SKILL.md).
+Every successful call returns `result`, `evidence_id` (UUID, also written to the audit log), `limitations[]`, `coverage` (`complete` | `unknown`), `session_context` and `suggested_next`. Errors carry `code`, `category`, `retryable`, `remediation` and `recovery_actions`. Every result, errors included, is also persisted to the evidence store and retrievable by its `evidence_id` via `get_evidence`, `export_evidence_bundle` and the `frida://evidence/{id}` resource (`frida://evidence` lists the latest 100). Field semantics and the error-code table are in [docs/interop.md](docs/interop.md); the agent workflow around them is in [skills/mobile-dynamic-analysis/SKILL.md](skills/mobile-dynamic-analysis/SKILL.md).
 
-## Working with static tools
+## Working with REA, ReVa and IDA
 
 frida-mobile-mcp is built to run next to ReVa (Ghidra), ida-pro-mcp (IDA Pro) and REA: the static side answers what the code says, this server answers what it does at runtime. A static tool finds `libfoo.so+0x1234`; `hook_method` or `analyze_native_function` take that string as-is; backtraces and `resolve_address` give offsets back in the same form for decompilation. `enumerate_modules` returns `base`/`end` for rebasing a Ghidra/IDA project, `dump_module_memory` writes a base-relative image of an unpacked library for raw import, and `capture_tls` shows the bytes a statically found wrapper actually puts on the wire. A three-server client configuration and a full static -> dynamic -> static walkthrough are in [docs/interop.md](docs/interop.md).
+
+[REA](https://github.com/morluto/rea) covers static Android analysis (`inspect_android_package`, `inspect_android_method`), ADB housekeeping and a generic Frida lane for desktop binaries; this server covers the mobile runtime (Java/ObjC bridges, prebuilt scripts, TLS keys, memory, UI driving). Register both in the same client, start with `get_app_info` so both servers analyse the same APK hash, and keep the combined catalog small with `FRIDA_MCP_TOOL_PROFILE=core` and `FRIDA_MCP_TOOLS_EXCLUDE=adb_*,frida_server_*`. Both servers return an evidence envelope with citable `evidence_id`s and an `export_evidence_bundle` tool, so one finding ledger can cite both. Routing rules, install lines, the field and error-code mapping and an APK -> static -> hook -> report walkthrough are in [docs/rea.md](docs/rea.md).
 
 ## HTTP transport
 
@@ -220,6 +226,7 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
   "sessionTimeoutMinutes": 30,
   "maxMessageBuffer": 1000,
   "auditLogPath": "~/.config/frida-mobile-mcp/audit.jsonl",
+  "evidence": { "enabled": true, "path": "~/.config/frida-mobile-mcp/evidence", "maxMb": 200, "maxEntries": 5000, "maxEntryKb": 2048 },
   "mobileMcp": { "enabled": true, "command": "npx", "args": ["-y", "@mobilenext/mobile-mcp@latest"] },
   "rateLimits": { "scriptsPerMinute": 10, "memoryReadsPerMinute": 60, "sessionsPerMinute": 5 }
 }
@@ -233,15 +240,24 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
 | `FRIDA_MCP_ALLOW_NATIVE_INJECTION` | unset | `1`/`true` enables `inject_library` (native .so/.dylib injection); a capability separate from custom scripts |
 | `FRIDA_MCP_ALLOW_ADB_SHELL` | unset | `1`/`true` enables `adb_shell` (arbitrary device shell commands) |
 | `FRIDA_MCP_DEBUG` | unset | `1` enables debug logging on stderr; same as `--debug` |
-| `FRIDA_MCP_REMOTE` | unset | `host[:port]` of a frida-server added as a remote device at startup (port 27042) |
+| `FRIDA_MCP_REMOTE` | unset | `host[:port]` of a frida-server added as a remote device at startup (port 27042); same as `--remote` |
+| `FRIDA_MCP_REMOTE_TOKEN` | unset | Auth token of that frida-server (`frida-server --token`); same as `--remote-token` |
+| `FRIDA_MCP_REMOTE_CERT` | unset | Path to the PEM certificate of a TLS frida-server (`frida-server --certificate`); same as `--remote-cert` |
 | `FRIDA_MCP_HTTP_TOKEN` | unset | Bearer token for the HTTP transport; same as `--http-token` |
 | `FRIDA_MCP_SCHEMA_PROFILE` | `full` | `compact` shortens tool schemas for small context windows |
+| `FRIDA_MCP_TOOL_PROFILE` | `full` | `core` registers only the core tool set (smaller `tools/list`, e.g. next to REA); also `--tool-profile`. With `FRIDA_MCP_SCHEMA_PROFILE=compact` the catalog drops to 17% of full; see [docs/rea.md](docs/rea.md#4-context-budget) |
+| `FRIDA_MCP_TOOLS_EXCLUDE` | (none) | Comma-separated tool-name globs never registered, e.g. `adb_*,frida_server_*` when REA's ADB tools handle the device; also `--exclude-tools`. `get_status` reports the count as `hidden_tools` |
 | `FRIDA_MCP_MAX_RESPONSE_CHARS` | `25000` | Truncation limit for a single tool response |
 | `FRIDA_MCP_RUNTIME` | Frida default | `qjs` or `v8` script runtime for injected agents |
+| `FRIDA_MCP_SNAPSHOTS` | unset | `1` pre-warms a per-session V8 snapshot of the bridge bundle (only with `FRIDA_MCP_RUNTIME=v8`); see [docs/clients.md](docs/clients.md#script-snapshots-snapshots--frida_mcp_snapshots) |
+| `FRIDA_MCP_EVIDENCE` | `1` | `0` stops persisting tool results to the evidence store; same as config `evidence.enabled` |
+| `FRIDA_MCP_EVIDENCE_PATH` | `~/.config/frida-mobile-mcp/evidence` | Evidence store directory (`YYYY-MM-DD/<evidence_id>.json` plus `index.jsonl`, mode 0600) |
+| `FRIDA_MCP_EVIDENCE_MAX_MB` | `200` | Size cap of the evidence store; the oldest records are pruned beyond it |
 | `FRIDA_MCP_BRIDGES_DIR` | `dist/bridges` | Directory with the bundled `java.js`/`objc.js` bridges |
 | `FRIDA_MCP_COMPILER_PROJECT_DIR` | `$TMPDIR/frida-mobile-mcp/compiler-project` | Project dir the Frida Compiler uses for ES module scripts |
 | `FRITAP_AGENT_PATH` | unset | Path to a `fritap_agent.js` bundle for `capture_tls` |
 | `FRITAP_VERSION` | `v2.5.2` | friTap tag to download when no local agent is found |
+| `FRITAP_AGENT_SHA256` | pinned for `v2.5.2` | Bare sha256 of the downloaded friTap agent for the selected `FRITAP_VERSION` tag; a mismatch refuses the bundle |
 
 ## Security guardrails
 
@@ -251,6 +267,7 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
 - `allowedDevices` restricts which device IDs may be used (empty = any).
 - Rate limits per minute for script loads, memory reads/scans and attach/spawn (`RATE_LIMIT_EXCEEDED`, retryable); `maxSessions` and `sessionTimeoutMinutes` cap concurrent and idle sessions.
 - Every tool call is appended to the JSONL audit log at `auditLogPath` with its `evidence_id`.
+- Every tool result (including memory dumps' metadata, read memory and found secrets) is persisted under the evidence path (`evidence.path`, default `~/.config/frida-mobile-mcp/evidence`) with mode 0600; opt out with `FRIDA_MCP_EVIDENCE=0`.
 - `dump_module_memory` only writes under the current directory, the OS temp directory or `~/.config/frida-mobile-mcp/dumps`.
 - HTTP transport: loopback bind by default, token required off-loopback, Host/Origin validation.
 
@@ -281,8 +298,10 @@ Device end-to-end tests opt in through environment variables:
 
 ```bash
 FRIDA_MCP_E2E_DEVICE=emulator-5556 FRIDA_MCP_E2E_TARGET=com.example.rc4demo npx vitest run test/e2e
-FRIDA_E2E=1 FRIDA_DEVICE_ID=emulator-5556 npx vitest run test/fritap/capture-tls.e2e.test.ts
+FRIDA_MCP_E2E_DEVICE=emulator-5556 npx vitest run test/fritap/capture-tls.e2e.test.ts
 ```
+
+The older `FRIDA_E2E=1`, `FRIDA_DEVICE_ID` and `FRIDA_E2E_TARGET` names still work for the `capture_tls` test.
 
 Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, ...); release-please opens the release PR, maintains `CHANGELOG.md` and the `publish` job in `release.yml` publishes to npm via OIDC trusted publishing. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 

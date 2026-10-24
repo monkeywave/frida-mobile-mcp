@@ -7,6 +7,24 @@ export interface ResolveOptions {
   deviceId?: string;
   type?: 'usb' | 'local' | 'remote';
   host?: string;
+  /** Auth token for a remote frida-server (`frida-server --token`). */
+  token?: string;
+  /** TLS certificate (PEM text or path) for a remote frida-server. */
+  certificate?: string;
+}
+
+/** The subset of frida's `RemoteDeviceOptions` this server forwards. */
+export interface RemoteAuthOptions {
+  token?: string;
+  certificate?: string;
+}
+
+/** Drop empty fields so frida only sees the options that were actually given. */
+export function toRemoteDeviceOptions(auth: RemoteAuthOptions = {}): frida.RemoteDeviceOptions | undefined {
+  const options: frida.RemoteDeviceOptions = {};
+  if (auth.token) options.token = auth.token;
+  if (auth.certificate) options.certificate = auth.certificate;
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 export async function resolveDevice(
@@ -33,7 +51,7 @@ export async function resolveDevice(
   }
   if (options.type === 'remote' && options.host) {
     log('debug', `Resolving remote device: ${options.host}`);
-    return await deviceManager.addRemoteDevice(options.host);
+    return await deviceManager.addRemoteDevice(options.host, toRemoteDeviceOptions(options));
   }
   if (options.type === 'usb') {
     return await getUsbDevice(deviceManager);

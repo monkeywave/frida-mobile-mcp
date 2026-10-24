@@ -23,6 +23,16 @@ Node.js >= 22.12 is required. `frida-mobile-mcp doctor` (or `node dist/index.js 
 5. If you add, rename or remove a tool, update `src/tools/register-all.ts`, the tables in `README.md`, the relevant `frida_help` topic in `src/tools/help.ts` (and `test/tools/help.test.ts`), `manifest.json` and, if the tool takes or returns addresses, `docs/interop.md`.
 6. If you change configuration or environment variables, update `README.md`, `docs/clients.md` and `server.json`.
 
+## Device end-to-end tests
+
+Device suites (`test/e2e/`, `test/fritap/*.e2e.test.ts`) opt in with `FRIDA_MCP_E2E_DEVICE=<device id>` and optionally `FRIDA_MCP_E2E_TARGET=<package>` (default `com.example.rc4demo`). The device needs frida-server 17.x and the target app installed.
+
+```bash
+FRIDA_MCP_E2E_DEVICE=emulator-5556 npx vitest run test/e2e
+```
+
+The legacy `FRIDA_E2E`, `FRIDA_DEVICE_ID` and `FRIDA_E2E_TARGET` names are still accepted by the `capture_tls` test. Unit tests never need a device: without these variables the device suites skip themselves.
+
 ## Commit messages and releases
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `ci:`, `refactor:`, `perf:`, `chore:`, `security:`. A `!` or a `BREAKING CHANGE:` footer marks a breaking change.
