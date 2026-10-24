@@ -75,33 +75,64 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ needs.release-please.outputs.tag_name }}" frida-mobile-mcp.mcpb --clobber
 
-      # Publish server.json to the official MCP registry, authenticating via GitHub OIDC
-      # (OIDC from this repo grants the io.github.monkeywave/* namespace).
+  # Register server.json with the official MCP registry. This is a SEPARATE job from
+  # `publish` (not just another step) so that a propagation-race failure is re-runnable
+  # on its own with `gh run rerun --failed`: re-running never re-triggers `npm publish`
+  # (which would 403 on the already-published version). It only starts once `publish`
+  # has succeeded, so npm definitely has the release by the time we poll for it.
+  mcp-registry:
+    name: Publish to the MCP registry
+    needs: [release-please, publish]
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write      # MCP registry GitHub OIDC login
+      contents: read       # checkout server.json at the release tag
+    env:
+      TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      # OIDC from this repo grants the io.github.monkeywave/* namespace.
       # The ubuntu-latest runner is linux/amd64; mcp-publisher is pinned for reproducibility.
-      - name: Publish to the MCP registry
-        env:
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+      - name: Install mcp-publisher
         run: |
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
           tar -xzf mcp-publisher.tar.gz mcp-publisher
-          ./mcp-publisher validate
-          # The MCP registry rejects registration until it can see the npm version we just
-          # published (it 404s against registry.npmjs.org otherwise). npm's read side lags
-          # the publish by up to a few minutes, so wait for the exact version to appear
-          # before registering — otherwise this step loses a genuine release to a race.
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate
+
+      # The MCP registry rejects registration until npm's public read replica can see the
+      # version we just published (it 404s against registry.npmjs.org otherwise). That read
+      # side can lag the publish by many minutes, so wait — polling both the per-version
+      # document (what the registry validates against) and the packument/dist-tags (so we
+      # don't register against a half-propagated view) — before registering.
+      - name: Wait for npm to serve the release
+        run: |
           VERSION="${TAG_NAME#v}"
-          echo "Waiting for npm to serve frida-mobile-mcp@${VERSION}..."
-          for i in $(seq 1 30); do
-            if curl -fsS "https://registry.npmjs.org/frida-mobile-mcp/${VERSION}" >/dev/null 2>&1; then
+          PKG="frida-mobile-mcp"
+          echo "Waiting for npm to serve ${PKG}@${VERSION}..."
+          for i in $(seq 1 60); do
+            if curl -fsS "https://registry.npmjs.org/${PKG}/${VERSION}" >/dev/null 2>&1 \
+               && curl -fsS "https://registry.npmjs.org/${PKG}" 2>/dev/null | grep -q "\"${VERSION}\""; then
               echo "npm is serving ${VERSION}; registering with the MCP registry"
               break
             fi
-            if [ "$i" -eq 30 ]; then
-              echo "npm did not serve ${VERSION} within ~5 min; aborting registry publish" >&2
+            if [ "$i" -eq 60 ]; then
+              echo "npm did not serve ${VERSION} within ~15 min; aborting." >&2
+              echo "npm has the release but its read replica is slow: just re-run this job" >&2
+              echo "(gh run rerun --failed) — it will not re-publish to npm." >&2
               exit 1
             fi
-            echo "  not visible yet ($i/30); retrying in 10s"
-            sleep 10
+            echo "  not visible yet ($i/60); retrying in 15s"
+            sleep 15
           done
+
+      - name: Register with the MCP registry
+        run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
