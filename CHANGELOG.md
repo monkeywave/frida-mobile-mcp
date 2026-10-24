@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.7.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.0...v0.7.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* Node.js 20 is no longer supported; Node.js >= 22.12 is required.
+
+### Features
+
+* Frida 17 support, native address interchange and static-tool analysis hand-off ([cf5bb38](https://github.com/monkeywave/frida-mobile-mcp/commit/cf5bb38df6d6deafb2d818c3c32ad729739cd274))
+* improved the different scripts ([e08b67a](https://github.com/monkeywave/frida-mobile-mcp/commit/e08b67ac6c0938d2c352cde45ba1f3a9994a141f))
+* require Node.js &gt;= 22.12 ([d1a74f2](https://github.com/monkeywave/frida-mobile-mcp/commit/d1a74f20579ea21ee6afae43d4a9080c65320e63))
+
+
+### Bug Fixes
+
+* add active_oracles to the session_context output schema ([75919d4](https://github.com/monkeywave/frida-mobile-mcp/commit/75919d4ecbf012e8f369cd969adec2464a685b8e))
+* changed to Trusted Publishing ([4efc560](https://github.com/monkeywave/frida-mobile-mcp/commit/4efc5607e236b39bffe7b92fa95cbb25b7b42a2a))
+* **ci:** make the ESM compiler project and path tests work on Windows ([2e76ef1](https://github.com/monkeywave/frida-mobile-mcp/commit/2e76ef1225be8bcacf6c22542013aeb8d5d2e8d8))
+* missing repo in package.json definition ([b2da55d](https://github.com/monkeywave/frida-mobile-mcp/commit/b2da55d6429438ed36e829e7478de42430cb4ef9))
+* publish workflow fix ([3c273f0](https://github.com/monkeywave/frida-mobile-mcp/commit/3c273f0b1ca00cf605266d5b1b6b81262e6d9c89))
+* publish workflow fix ([08cdee9](https://github.com/monkeywave/frida-mobile-mcp/commit/08cdee9f7ff663e5bdd946068b32044b83c93864))
+* remove duplicate publish job from release.yml ([28a1504](https://github.com/monkeywave/frida-mobile-mcp/commit/28a150468ee4a32987bbab700c0467f8adc048a8))
+* **security:** resolve CodeQL ReDoS and incomplete-escaping alerts ([e31817b](https://github.com/monkeywave/frida-mobile-mcp/commit/e31817ba3c2c8ef33e244e3069f316b01f33ca69))
+* update CI pipeline and commit lock file ([7be4d80](https://github.com/monkeywave/frida-mobile-mcp/commit/7be4d8084ca795e7ceae2106200908abea357730))
+
+
+### CI/CD
+
+* split MCP-registry publish into its own re-runnable job ([4f42520](https://github.com/monkeywave/frida-mobile-mcp/commit/4f425204e103de851ed2067b940b497dd60adfed))
+* wait for npm propagation before MCP-registry publish ([e21a3fc](https://github.com/monkeywave/frida-mobile-mcp/commit/e21a3fc13968c8c1f62577ae5833280f879b6b03))
+
+
+### Miscellaneous
+
+* **main:** release 0.2.1 ([e50ef0c](https://github.com/monkeywave/frida-mobile-mcp/commit/e50ef0c0a1d7b1e9a49d1e7c089e915d0e00a31b))
+* **main:** release 0.2.1 ([deb6c55](https://github.com/monkeywave/frida-mobile-mcp/commit/deb6c555faa90db5c9a6f5b1a60b527d35f8a656))
+* **main:** release 0.2.2 ([f3697b5](https://github.com/monkeywave/frida-mobile-mcp/commit/f3697b5eb85973720d89de5dd0654f4775d19594))
+* **main:** release 0.2.2 ([c2efda3](https://github.com/monkeywave/frida-mobile-mcp/commit/c2efda308fc5a1d2c5098bc7b3820c539887117b))
+* **main:** release 0.2.3 ([f997cc1](https://github.com/monkeywave/frida-mobile-mcp/commit/f997cc12dcbb8e7fb000ce5064061e5d8c27ff63))
+* **main:** release 0.2.3 ([5151502](https://github.com/monkeywave/frida-mobile-mcp/commit/515150279b1165c283a49e989f9683d8356c579c))
+* **main:** release 0.3.0 ([#4](https://github.com/monkeywave/frida-mobile-mcp/issues/4)) ([d73c785](https://github.com/monkeywave/frida-mobile-mcp/commit/d73c78560c0abcf14a3efc63a81c9d047e761136))
+* **main:** release 0.5.0 ([#16](https://github.com/monkeywave/frida-mobile-mcp/issues/16)) ([6a416cf](https://github.com/monkeywave/frida-mobile-mcp/commit/6a416cfd1aae64e2c8c326228c89f75ed5afc398))
+* **main:** release 0.5.1 ([#17](https://github.com/monkeywave/frida-mobile-mcp/issues/17)) ([d366b55](https://github.com/monkeywave/frida-mobile-mcp/commit/d366b55874d892986542373febd18a081182e4f2))
+* **main:** release 0.6.0 ([#18](https://github.com/monkeywave/frida-mobile-mcp/issues/18)) ([c4a6265](https://github.com/monkeywave/frida-mobile-mcp/commit/c4a6265a022559d0629d2630af023bfc8f1de39b))
+* release 0.4.0 ([fcd3934](https://github.com/monkeywave/frida-mobile-mcp/commit/fcd393418208981247a745d6df1f818021a62c87))
+* release 0.5.0 ([5586f90](https://github.com/monkeywave/frida-mobile-mcp/commit/5586f90ce91f8419357b44be24732f8dc89561db))
+* release 0.5.1 ([b4e22a7](https://github.com/monkeywave/frida-mobile-mcp/commit/b4e22a72e0e50e770ab44333c98e3cbfbc881428))
+* release 0.6.0 ([4b26a08](https://github.com/monkeywave/frida-mobile-mcp/commit/4b26a089eb579e4dfd5d8a4952c933a3041e1024))
+* release 0.7.0 ([5af6ee4](https://github.com/monkeywave/frida-mobile-mcp/commit/5af6ee4f093fcac7abca78980db2706037a33dad))
+
 ## [0.6.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.5.1...v0.6.0) (2026-10-23)
 
 
