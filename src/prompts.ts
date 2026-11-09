@@ -106,6 +106,7 @@ With REA: get the exact installed APK with \`get_app_info({ target: "${package_n
 
 ## Phase 2: TRANSPORT SECURITY
 5. \`capture_tls({ target: "${package_name}", keylog_path: "./keys.log", full_capture: true })\` — friTap: TLS keys (Wireshark tls.keylog_file) and decrypted records as fritap_datalog messages
+   Options: \`attribute_sdk: true\` adds a \`fritap_caller_stack\` per connection (which SDK/app code produced the traffic); \`pcap_path\` writes a synthetic pcap; \`protocols: ["tls","rc4"]\` widens the hooks; if the app crashes or nothing is captured run \`probe: true\` first (reports \`fritap_platform_report\`, installs no hooks), and use \`pairip_safe: true\` (prefer \`spawn: false\`) for PairIP/anti-tamper apps. For a guided capture-and-review flow use the \`tls_traffic_audit\` prompt.
 6. \`bypass_ssl_pinning({ target: "${package_name}" })\` — bypass certificate pinning if a proxy is needed
 7. \`run_prebuilt_script({ script_name: "network_inspector", target: "${package_name}" })\` — monitor network
 8. Navigate the app to trigger network requests
@@ -295,5 +296,49 @@ Caveats: hardware-backed keys (Android Keystore / iOS Secure Enclave) never leav
         },
       }],
     })
+  );
+
+  server.registerPrompt(
+    'tls_traffic_audit',
+    {
+      description: 'friTap-backed TLS traffic audit — capture keys and decrypted plaintext with capture_tls, attribute traffic to SDKs, review per-library stats, optionally hand off to `fritap mcp`.',
+      argsSchema: z.object({
+        target: z.string().describe('App bundle ID, process name or PID'),
+        device: z.string().optional().describe('Device ID (defaults to the selected device)'),
+        protocols: z.string().optional().describe('Comma-separated friTap protocols: tls, rc4, auto, all (default tls)'),
+      }),
+    },
+    async ({ target, device, protocols }) => {
+      const protocolList = (protocols || 'tls').split(',').map((p) => p.trim()).filter(Boolean);
+      const deviceArg = device ? `, device: "${device}"` : '';
+      return {
+        messages: [{
+          role: 'user' as const,
+          content: {
+            type: 'text' as const,
+            text: `You are auditing the network traffic of ${target}${device ? ` on device ${device}` : ''} with friTap (via \`capture_tls\`) and UI automation.
+
+## Phase 1: CAPTURE
+1. \`capture_tls({ target: "${target}"${deviceArg}, keylog_path: "./keys.log", pcap_path: "./decrypted.pcap", full_capture: true, attribute_sdk: true, protocols: ${JSON.stringify(protocolList)} })\` — keep the \`session_id\`; note \`agent_version\` and \`hooks\`.
+2. If the app crashes during instrumentation or nothing is captured, run \`capture_tls({ target: "${target}"${deviceArg}, probe: true })\` first: it reports the detected platform branch as a \`fritap_platform_report\` message and installs no hooks. Then retry with \`no_loader_hook: true\`, or \`pairip_safe: true\` (prefer \`spawn: false\`) for PairIP/anti-tamper apps.
+3. For TLS libraries friTap does not know by name add \`library_scan: true\`; add \`default_fd: true\` to keep records whose socket cannot be resolved.
+
+## Phase 2: DRIVE THE APP
+4. Use \`mobile_action\` (or \`trigger_and_wait\`) to exercise login, main screens and background sync so the network paths run.
+
+## Phase 3: READ AND REVIEW
+5. \`get_messages({ session_id })\` — \`fritap_datalog\` (decrypted records), \`fritap_caller_stack\` (backtrace per connection: which SDK/app code produced it) and \`fritap_platform_report\`.
+6. Review \`stats.per_library\`: which TLS libraries carried traffic, which hooked libraries stayed idle (a library with traffic but no keys means a gap — retry with \`library_scan\` or \`patterns\`/\`offsets\`).
+7. Group traffic by caller stack: first-party vs third-party SDK (analytics, ads, crash reporters). Look for plaintext, tokens in headers/bodies, PII sent to third parties.
+8. \`stop_instrumentation({ session_id })\` to release the hooks.
+
+## Phase 4: OPTIONAL HAND-OFF to friTap's own MCP server
+If \`fritap mcp\` is installed and connected (\`pip install 'fritap[mcp]'\`; captures need \`--allow-capture\`), analyse the same session there with \`get_digest\`, \`list_findings\` and \`find_values\`, or import \`./keys.log\` into Wireshark with \`./decrypted.pcap\` (\`tls.keylog_file\`). Use \`start_capture\`/\`mark_phase\` over there only for a fresh, phase-labelled capture; do not run two captures on the same app at once.
+
+Report: libraries hooked, hosts/endpoints contacted per SDK, sensitive data found (with severity and the \`evidence_id\` of each tool result), and remediation.`,
+          },
+        }],
+      };
+    }
   );
 }

@@ -14,9 +14,10 @@ import commonjs from '@rollup/plugin-commonjs';
 import terser from '@rollup/plugin-terser';
 import polyfills from '@frida/rollup-plugin-node-polyfills';
 import { createRequire } from 'node:module';
-import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +27,50 @@ const BRIDGES = [
   { name: 'java', pkg: 'frida-java-bridge', entry: path.join(here, 'entries', 'java.js') },
   { name: 'objc', pkg: 'frida-objc-bridge', entry: path.join(here, 'entries', 'objc.js') },
 ];
+
+const JAVA_BRIDGE_PATCH_MODULE = path.resolve(here, '..', 'src', 'agent', 'java-bridge-patch.ts');
+
+/**
+ * Load the shared (import-free) TypeScript helper without a prior tsc run: this script runs
+ * before tsc, and Node's own type stripping is not available on every supported Node version.
+ */
+async function loadJavaBridgePatch() {
+  const source = await readFile(JAVA_BRIDGE_PATCH_MODULE, 'utf8');
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  });
+  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+}
+
+const javaBridgePatch = await loadJavaBridgePatch();
+
+const JAVA_BRIDGE_INDEX = /node_modules[\\/]frida-java-bridge[\\/]index\.js$/;
+
+/** Warn (do not fail) when upstream no longer has the VM.dispose call the workaround comments out. */
+function warnJavaBridgePatchMissing(file) {
+  console.error(`[bridges] WARNING: VM.dispose(vm) call not found in ${file}; ` +
+    'the multi-script unload workaround may be obsolete or ineffective (see src/agent/java-bridge-patch.ts)');
+}
+
+/** Rollup transform: multi-script unload workaround for frida-java-bridge, see src/agent/java-bridge-patch.ts. */
+function javaBridgeThreadDetachPatch() {
+  let sawIndex = false;
+  return {
+    name: 'frida-java-bridge-skip-thread-detach',
+    transform(code, id) {
+      if (!JAVA_BRIDGE_INDEX.test(id)) return null;
+      sawIndex = true;
+      const result = javaBridgePatch.skipJavaBridgeThreadDetach(code);
+      if (!result.patched) warnJavaBridgePatchMissing(id);
+      return result.status === 'patched' ? { code: result.source, map: null } : null;
+    },
+    buildEnd() {
+      if (!sawIndex && this.getModuleIds().some((id) => /frida-java-bridge/.test(id))) {
+        warnJavaBridgePatchMissing('frida-java-bridge/index.js (module not seen)');
+      }
+    },
+  };
+}
 
 function packageVersion(pkg) {
   return require(`${pkg}/package.json`).version;
@@ -46,6 +91,7 @@ async function bundle(bridge) {
           return null;
         },
       },
+      javaBridgeThreadDetachPatch(),
       polyfills(),
       nodeResolve(),
       commonjs(),
@@ -58,23 +104,10 @@ async function bundle(bridge) {
   });
 
   const banner = `/*! ${bridge.pkg} ${version} - bundled by frida-mobile-mcp (classic script, evaluates via Script.evaluate) */`;
-  // Workaround for frida-java-bridge 7.0.13 with several scripts in one process: each script
-  // has its own bridge instance; the one that attached the JS thread to the VM detaches it again
-  // in its runtime-level dispose (Script.bindWeak(runtime, ...) at module evaluation) while
-  // sibling scripts still hold a cached JNIEnv for that thread. Their next DeleteGlobalRef then
-  // aborts the app with "JNI DETECTED ERROR IN APPLICATION: a thread is making JNI calls without
-  // being attached". Skipping only that top-level weak binding keeps the thread attached; the
-  // per-object handle destructors (bound later, at runtime) are unaffected.
-  const intro = bridge.name === 'java'
-    ? 'var __fridaMcpBindWeak = Script.bindWeak; Script.bindWeak = function () { return 0; };'
-    : '';
-  const outro = bridge.name === 'java' ? 'Script.bindWeak = __fridaMcpBindWeak;' : '';
   const { output } = await build.generate({
     format: 'iife',
     strict: false,
     banner,
-    intro,
-    outro,
     generatedCode: { preset: 'es2015' },
   });
   await build.close();

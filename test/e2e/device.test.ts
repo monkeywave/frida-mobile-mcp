@@ -26,10 +26,16 @@ interface SpawnedSession {
   session: frida.Session;
 }
 
+/**
+ * Spawn the app and RESUME it before attaching, like the session helper's fallback spawn: Android's
+ * ActivityManager kills an app that is not resumed within ~10 s of the spawn ("start timeout"), and
+ * the attach + Java bridge load alone can exceed that on a slow emulator.
+ */
 async function spawnAndAttach(): Promise<SpawnedSession> {
   const device = await frida.getDevice(DEVICE_ID!, { timeout: 5000 });
   const pid = await device.spawn(TARGET);
   try {
+    await device.resume(pid);
     const session = await device.attach(pid);
     return { device, pid, session };
   } catch (error) {
@@ -42,7 +48,6 @@ async function spawnAndAttach(): Promise<SpawnedSession> {
 async function teardown(spawned: SpawnedSession | undefined, script: frida.Script | undefined): Promise<void> {
   if (!spawned) return;
   const steps: Array<() => Promise<unknown>> = [
-    () => spawned.device.resume(spawned.pid),
     () => (script && !script.isDestroyed ? script.unload() : Promise.resolve()),
     () => spawned.session.detach(),
     () => spawned.device.kill(spawned.pid),
@@ -109,10 +114,9 @@ describe.skipIf(!DEVICE_ID)('e2e: Frida 17 agent on a real device', () => {
           source: `Java.perform(function(){ send({cls: Java.use('java.lang.String').class.getName()}); })`,
         });
         const message = firstSendMessage(script, TEST_TIMEOUT_MS - 5000);
+        // The app is already running (resumed in spawnAndAttach), so Java.perform() fires as soon
+        // as the app class loader exists.
         await script.load();
-        // Java.perform() in a freshly spawned app defers until the app class loader exists,
-        // which only happens once the process runs.
-        await spawned.device.resume(spawned.pid);
 
         expect(await message).toEqual({ cls: 'java.lang.String' });
       } finally {

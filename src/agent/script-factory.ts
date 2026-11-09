@@ -30,6 +30,7 @@ import {
   getOrCreateSessionSnapshot,
   type SnapshotHost,
 } from './snapshots.js';
+import { composedSourceUsesJavaBridge, recordJavaBridgeUsage } from './script-traits.js';
 
 export {
   buildStaticPreamble,
@@ -64,6 +65,16 @@ export interface AgentScriptOptions {
   sessionEntry?: SnapshotHost;
   /** Defaults to `FRIDA_MCP_SNAPSHOTS` / config `snapshots` (off). */
   useSnapshot?: boolean;
+  /**
+   * Passthrough bundles only: whether the bundle embeds frida-java-bridge, when the caller knows.
+   * Unset falls back to detecting the package name in the bundle source.
+   */
+  usesJavaBridge?: boolean;
+  /**
+   * Whether the script hooks Java methods (replaces implementations, registers classes). Only
+   * such scripts must be unloaded newest-first; unset falls back to scanning the source.
+   */
+  hooksJavaMethods?: boolean;
 }
 
 export interface ComposedAgentSource {
@@ -71,6 +82,8 @@ export interface ComposedAgentSource {
   name: string;
   bridges: BridgeName[];
   passthrough: boolean;
+  /** Explicit Java bridge trait of a passthrough bundle (see AgentScriptOptions.usesJavaBridge). */
+  usesJavaBridge?: boolean;
 }
 
 export function defaultBridgesFor(platform: AgentPlatform): BridgeName[] {
@@ -121,7 +134,7 @@ function classicPartsOf(opts: AgentScriptOptions): ClassicParts {
 }
 
 function passthroughOf(opts: AgentScriptOptions): ComposedAgentSource {
-  return { source: opts.source, name: opts.name, bridges: [], passthrough: true };
+  return { source: opts.source, name: opts.name, bridges: [], passthrough: true, usesJavaBridge: opts.usesJavaBridge };
 }
 
 /** Pure composition step; unit-testable without Frida. */
@@ -193,9 +206,14 @@ export async function createAgentScript(
     scriptOptions.runtime = runtime as frida.ScriptRuntime;
   }
   const snapshot = composed.passthrough ? null : await snapshotFor(opts, composed.bridges, runtime);
+  let script: frida.Script;
   if (!snapshot) {
-    return session.createScript(composed.source, scriptOptions);
+    script = await session.createScript(composed.source, scriptOptions);
+  } else {
+    scriptOptions.snapshot = snapshot;
+    script = await session.createScript(composeSnapshotLiveSource(opts).source, scriptOptions);
   }
-  scriptOptions.snapshot = snapshot;
-  return session.createScript(composeSnapshotLiveSource(opts).source, scriptOptions);
+  // Teardown ordering (unload newest-first, unload_script guard) needs to know which scripts carry a Java bridge.
+  recordJavaBridgeUsage(script, composedSourceUsesJavaBridge(composed, opts));
+  return script;
 }

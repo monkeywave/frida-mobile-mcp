@@ -1,11 +1,53 @@
 import frida from 'frida';
 import type { DeviceManager } from '../device/manager.js';
-import type { SessionEntry } from '../types.js';
+import type { SessionEntry, SessionRealm } from '../types.js';
 import { getState, toCrashSummary } from '../state.js';
 import { DeviceNotFoundError, FridaMcpError, ProcessNotFoundError, wrapFridaError } from './errors.js';
 import { log } from './logger.js';
 
 export const FRIDA_OPERATION_TIMEOUT_MS = 20_000;
+
+export const DEFAULT_SESSION_REALM: SessionRealm = 'native';
+
+/**
+ * Frida attach options for a realm. Native keeps the historical empty options object, so older
+ * frida-servers never see an unknown option; only 'emulated' sets `realm` (Frida >= 17.26).
+ */
+export function attachOptionsForRealm(realm: SessionRealm = DEFAULT_SESSION_REALM): frida.SessionOptions {
+  return realm === 'emulated' ? { realm: 'emulated' as frida.Realm } : {};
+}
+
+/** `device.attach` in a realm; a native attach is issued exactly as before (no options). */
+export function attachInRealm(device: frida.Device, pid: number, realm: SessionRealm = DEFAULT_SESSION_REALM): Promise<frida.Session> {
+  return realm === 'native' ? device.attach(pid) : device.attach(pid, attachOptionsForRealm(realm));
+}
+
+/**
+ * Spawn `program` (left suspended) and attach in `realm`. A spawned process that cannot be
+ * attached is killed (best effort) so it never stays suspended forever; the attach error is rethrown.
+ */
+export async function spawnAndAttach(
+  device: frida.Device,
+  program: string,
+  options: { realm?: SessionRealm } = {},
+): Promise<{ pid: number; session: frida.Session }> {
+  const pid = await device.spawn(program);
+  try {
+    return { pid, session: await attachInRealm(device, pid, options.realm) };
+  } catch (attachErr) {
+    await killSpawnedQuietly(device, pid);
+    throw attachErr;
+  }
+}
+
+/** Best effort: a spawned-but-unattached process would otherwise stay suspended forever. */
+async function killSpawnedQuietly(device: frida.Device, pid: number): Promise<void> {
+  try {
+    await device.kill(pid);
+  } catch (err) {
+    log('debug', `Could not kill spawned pid ${pid} after attach failure: ${String(err)}`);
+  }
+}
 
 export interface SessionOptions {
   target: string;
@@ -19,6 +61,12 @@ export interface SessionOptions {
    * via `fridaDevice.resume(sessionEntry.pid)` after loading your script.
    */
   resume?: boolean;
+  /**
+   * Attach realm (Frida >= 17.26). 'emulated' instruments the ARM side of an app running under
+   * native-bridge translation on an x86 Android emulator. Default 'native'. Part of the session
+   * identity: a cached session is only reused by target when its realm matches.
+   */
+  realm?: SessionRealm;
 }
 
 export interface SessionResolution {
@@ -27,6 +75,21 @@ export interface SessionResolution {
   isNew: boolean;
   /** True when the process was spawned and is still suspended; the caller must resume it. */
   needsResume: boolean;
+  /**
+   * True when the target was spawned as a fallback and resumed before the attach (see
+   * EARLY_RESUME_SESSION_NOTE). Result-producing callers add sessionResolutionLimitations() to limitations.
+   */
+  resumedBeforeAttach?: boolean;
+}
+
+/** Limitation text for a session whose fallback-spawned target was resumed before the attach. */
+export const EARLY_RESUME_SESSION_NOTE =
+  'The target was not running, so it was spawned and resumed before attaching (avoids the OS launch ' +
+  'watchdog killing a suspended app); code that ran in the first moments after launch was not observed.';
+
+/** `limitations` entries a tool result should carry for how its session was obtained. */
+export function sessionResolutionLimitations(resolution: Pick<SessionResolution, 'resumedBeforeAttach'>): string[] {
+  return resolution.resumedBeforeAttach ? [EARLY_RESUME_SESSION_NOTE] : [];
 }
 
 /**
@@ -58,15 +121,20 @@ export async function getOrCreateSession(
   const platform = await deviceManager.detectPlatform(fridaDevice);
 
   const { pid, spawned } = await resolveTargetPid(fridaDevice, options);
-  const session = await attachToPid(fridaDevice, pid, options.target, spawned);
+  // Resume a fallback spawn before the (possibly slow) attach: Android's ActivityManager kills an app
+  // that is not resumed within ~10 s of the spawn ("start timeout"), and iOS FrontBoard has a similar
+  // launch watchdog. Nothing is instrumented before that resume on this path, so no coverage is lost.
+  const needsResume = await resumeIfRequested(fridaDevice, pid, spawned, options);
+  const resumedBeforeAttach = spawned && !needsResume;
+  const realm = options.realm ?? DEFAULT_SESSION_REALM;
+  const session = await attachToPid(fridaDevice, pid, options.target, spawned, realm);
 
   const sessionEntry = createSessionEntry(session, pid, fridaDevice, options.target, platform);
+  sessionEntry.realm = realm;
   state.addSession(sessionEntry);
   connectDetachHandler(sessionEntry);
 
-  const needsResume = await resumeIfRequested(fridaDevice, pid, spawned, options);
-
-  return { sessionEntry, fridaDevice, isNew: true, needsResume };
+  return { sessionEntry, fridaDevice, isNew: true, needsResume, resumedBeforeAttach };
 }
 
 function findExistingSession(options: SessionOptions): SessionEntry | undefined {
@@ -76,7 +144,7 @@ function findExistingSession(options: SessionOptions): SessionEntry | undefined 
     if (byId) return byId;
   }
   if (!options.forceSpawn) {
-    return state.findSessionByTarget(options.target);
+    return state.findSessionByTarget(options.target, options.realm ?? DEFAULT_SESSION_REALM);
   }
   return undefined;
 }
@@ -187,14 +255,18 @@ async function attachToPid(
   device: frida.Device,
   pid: number,
   target: string,
-  spawned: boolean
+  spawned: boolean,
+  realm: SessionRealm = DEFAULT_SESSION_REALM
 ): Promise<frida.Session> {
   try {
-    return await withTimeout((cancellable) => device.attach(pid, {}, cancellable), `attach(${pid})`);
+    return await withTimeout(
+      (cancellable) => device.attach(pid, attachOptionsForRealm(realm), cancellable),
+      `attach(${pid}${realm === 'native' ? '' : `, realm=${realm}`})`
+    );
   } catch (err) {
     if (spawned) {
       // Never leave a suspended process behind when we cannot instrument it.
-      try { await device.kill(pid); } catch { /* best-effort */ }
+      await killSpawnedQuietly(device, pid);
     }
     throw translateAttachError(err, target, pid);
   }
@@ -260,6 +332,7 @@ function connectDetachHandler(entry: SessionEntry): void {
 /**
  * Resume a process that we spawned as a fallback, unless the caller asked to
  * do it themselves. `forceSpawn` always leaves the process suspended.
+ * Called right after the spawn, before the attach (launch-watchdog safe).
  * Returns whether the caller still has to resume the process.
  */
 async function resumeIfRequested(

@@ -14,6 +14,15 @@ import { GLOB_HELPER } from './trace.js';
 import type { BridgeName } from '../agent/bridges.js';
 import { callRpcWithTimeout } from '../helpers/rpc-timeout.js';
 import type { CoverageEntry } from '../types.js';
+import {
+  coverageEngineSchema,
+  stalkerModuleSchema,
+  stalkerOffsetRangeSchema,
+  stalkerThreadSchema,
+  stalkerDurationSchema,
+  stalkerMaxBlocksSchema,
+  runStalkerCoverage,
+} from './coverage-stalker.js';
 
 const NO_BRIDGES: BridgeName[] = [];
 const DEFAULT_MAX_TARGETS = 300;
@@ -34,7 +43,7 @@ export function registerCoverageTool(server: McpServer, deviceManager: DeviceMan
     {
       title: 'Trace Coverage (Reachability Map)',
       description:
-        'Arm a broad set of cheap entry-hooks over a target set and track which have been REACHED (covered) vs which are still COLD — the reachability signal for a drive loop. Unlike trace_method (time-boxed, logs every call), this is persistent and entry-only: it answers "what code have I NOT exercised yet, so where should I keep driving?". Scope can be a single class (all its methods), a class/package glob ("com.example.*"), a native module glob ("libfoo.so!*"), or an ObjC pattern ("-[MyClass *]"). Workflow: arm it, then alternate trigger_and_wait (drive the UI) with trace_coverage {report_only:true} to watch the cold set shrink. Each target fires at most once (first-seen), so hot methods do not flood output.',
+        'Arm a broad set of cheap entry-hooks over a target set and track which have been REACHED (covered) vs which are still COLD — the reachability signal for a drive loop. Unlike trace_method (time-boxed, logs every call), this is persistent and entry-only: it answers "what code have I NOT exercised yet, so where should I keep driving?". Scope can be a single class (all its methods), a class/package glob ("com.example.*"), a native module glob ("libfoo.so!*"), or an ObjC pattern ("-[MyClass *]"). Workflow: arm it, then alternate trigger_and_wait (drive the UI) with trace_coverage {report_only:true} to watch the cold set shrink. Each target fires at most once (first-seen), so hot methods do not flood output. Set engine="stalker" with `module` for a time-boxed basic-block map of one native module (Stalker; CPU heavy) returned as module+0xoffset blocks.',
       inputSchema: z.object({
         target: z.string().optional().describe('App bundle ID, process name, or PID. Optional when session_id is given.'),
         session_id: z.string().optional().describe('Reuse an existing session (from explore_app/get_status).'),
@@ -46,6 +55,12 @@ export function registerCoverageTool(server: McpServer, deviceManager: DeviceMan
         max_targets: z.number().optional().describe(`Cap the number of hooked targets (default: ${DEFAULT_MAX_TARGETS}).`),
         report_only: z.boolean().optional().describe('Do not arm anything; just read the covered/cold map of an existing coverage run (the latest for this session, or coverage_id).'),
         coverage_id: z.string().optional().describe('Which coverage run to report on (defaults to the most recent for the session).'),
+        engine: coverageEngineSchema,
+        module: stalkerModuleSchema,
+        offset_range: stalkerOffsetRangeSchema,
+        thread: stalkerThreadSchema,
+        duration_seconds: stalkerDurationSchema,
+        max_blocks: stalkerMaxBlocksSchema,
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
@@ -56,7 +71,7 @@ export function registerCoverageTool(server: McpServer, deviceManager: DeviceMan
         openWorldHint: true,
       },
     },
-    async ({ target, session_id, device, scope, max_targets, report_only, coverage_id, response_format }) => {
+    async ({ target, session_id, device, scope, max_targets, report_only, coverage_id, engine, module, offset_range, thread, duration_seconds, max_blocks, response_format }) => {
       try {
         const state = getState();
 
@@ -72,7 +87,17 @@ export function registerCoverageTool(server: McpServer, deviceManager: DeviceMan
           return formatToolResponse(buildResult(shapeReport(entry), reportActions(entry)), response_format);
         }
 
-        // ---- arm: install the broad entry-hook set ----
+        // ---- stalker: a bounded basic-block recording window over one module ----
+        if (engine === 'stalker') {
+          const resolved = resolveInstrumentationTarget(target, session_id);
+          const result = await runStalkerCoverage(deviceManager, {
+            target: resolved.target, sessionId: resolved.sessionId, device,
+            module, offset_range, thread, duration_seconds, max_blocks,
+          });
+          return formatToolResponse(result, response_format);
+        }
+
+        // ---- arm (engine 'hooks', default): install the broad entry-hook set ----
         if (!scope) {
           throw new FridaMcpError('INVALID_ARGUMENT', 'scope is required to arm coverage (e.g. "com.example.*" or "libfoo.so!*").', []);
         }

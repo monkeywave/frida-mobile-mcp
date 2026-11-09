@@ -84,6 +84,67 @@ describe('advanced session tools', () => {
     });
   });
 
+  describe('realm (Frida 17.26)', () => {
+    it('spawn_process attaches with realm=emulated and reports it', async () => {
+      const body = await callJson(harness.client, 'spawn_process', { program: TARGET, realm: 'emulated' });
+
+      expect(device.spawn).toHaveBeenCalledWith(TARGET);
+      expect(device.attach).toHaveBeenCalledWith(SPAWNED_PID, { realm: 'emulated' });
+      expect(body.result.realm).toBe('emulated');
+      expect(Array.from(getState().sessions.values())[0].realm).toBe('emulated');
+    });
+
+    it('spawn_process kills the spawned pid and returns a structured error when attach fails', async () => {
+      device.attach.mockRejectedValueOnce(new Error('unable to attach: realm emulated unsupported'));
+      const body = await callJson(harness.client, 'spawn_process', { program: TARGET, realm: 'emulated' });
+      expect(device.kill).toHaveBeenCalledWith(SPAWNED_PID);
+      expect(body.error.code).toBeTypeOf('string');
+      expect(getState().sessions.size).toBe(0);
+    });
+
+    it('spawn_process still returns the attach error when the cleanup kill also fails', async () => {
+      device.attach.mockRejectedValueOnce(new Error('attach boom'));
+      device.kill.mockRejectedValueOnce(new Error('kill boom'));
+      const body = await callJson(harness.client, 'spawn_process', { program: TARGET });
+      expect(device.kill).toHaveBeenCalledWith(SPAWNED_PID);
+      expect(body.error.code).toBeTypeOf('string');
+    });
+
+    it('attach_process defaults to native and keeps the plain attach call', async () => {
+      const body = await callJson(harness.client, 'attach_process', { target: 1234 });
+
+      expect(device.attach.mock.calls[0]).toEqual([1234]);
+      expect(body.result.realm).toBe('native');
+      expect(Array.from(getState().sessions.values())[0].realm).toBe('native');
+    });
+
+    it('attach_process passes realm=emulated to device.attach', async () => {
+      const body = await callJson(harness.client, 'attach_process', { target: 1234, realm: 'emulated' });
+
+      expect(device.attach).toHaveBeenCalledWith(1234, { realm: 'emulated' });
+      expect(body.result.realm).toBe('emulated');
+    });
+
+    it('rejects an unknown realm', async () => {
+      const result = await harness.client.callTool({ name: 'attach_process', arguments: { target: 1234, realm: 'arm' } });
+
+      expect(result.isError).toBe(true);
+      expect(device.attach).not.toHaveBeenCalled();
+    });
+
+    it('list_sessions exposes the realm (native when unset)', async () => {
+      const state = getState();
+      seedSession(state, [], { id: 'n', target: 'one.app', pid: 1 });
+      seedSession(state, [], { id: 'e', target: 'one.app', pid: 1 }).realm = 'emulated';
+
+      const body = await callJson(harness.client, 'list_sessions', {});
+      const byId = Object.fromEntries(body.result.sessions.map((s: any) => [s.id, s]));
+
+      expect(byId.n.realm).toBe('native');
+      expect(byId.e.realm).toBe('emulated');
+    });
+  });
+
   describe('attach_process', () => {
     it('attaches directly to a numeric pid', async () => {
       const body = await callJson(harness.client, 'attach_process', { target: 1234 });
@@ -163,6 +224,23 @@ describe('advanced session tools', () => {
       expect(session.detach).toHaveBeenCalledTimes(1);
       expect(state.getSession(entry.id)).toBeUndefined();
       expect(body.result.status).toBe('detached');
+    });
+
+    it('unloads scripts newest-first (Java-bridge teardown must be LIFO)', async () => {
+      const state = getState();
+      const order: string[] = [];
+      const tracked = (id: string) => {
+        const script = fakeScript();
+        const unload = script.unload.bind(script);
+        script.unload = async () => { order.push(id); await unload(); };
+        return scriptEntry(id, script);
+      };
+      const entry = seedSession(state, [tracked('first'), tracked('second'), tracked('third')]);
+      entry.session = makeSession() as any;
+
+      await callJson(harness.client, 'detach_session', { session_id: entry.id });
+
+      expect(order).toEqual(['third', 'second', 'first']);
     });
 
     it('reports SESSION_NOT_FOUND for an unknown session', async () => {

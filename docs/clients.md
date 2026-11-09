@@ -342,7 +342,7 @@ FRIDA_MCP_REMOTE=127.0.0.1:27042 npx -y frida-mobile-mcp
 
 ## Version matching
 
-This package bundles frida-node 17.24.x, which speaks to frida-server 17.x. Keep the major version identical and ideally the minor version too.
+This package bundles frida-node 17.26.x, which speaks to frida-server 17.x. Keep the major version identical and ideally the minor version too.
 
 Symptoms of a mismatch:
 
@@ -353,12 +353,12 @@ Symptoms of a mismatch:
 Fix:
 
 1. Run `frida-mobile-mcp doctor`. It prints the frida-node version and the frida-server version seen on each USB device, and flags mismatches.
-2. Download the matching `frida-server` for your device architecture from <https://github.com/frida/frida/releases> (for example `frida-server-17.24.3-android-arm64.xz`).
+2. Download the matching `frida-server` for your device architecture from <https://github.com/frida/frida/releases> (for example `frida-server-17.26.2-android-arm64.xz`).
 3. Install and start it as root:
 
 ```bash
-xz -d frida-server-17.24.3-android-arm64.xz
-adb push frida-server-17.24.3-android-arm64 /data/local/tmp/frida-server
+xz -d frida-server-17.26.2-android-arm64.xz
+adb push frida-server-17.26.2-android-arm64 /data/local/tmp/frida-server
 adb shell "chmod 755 /data/local/tmp/frida-server"
 adb shell "su -c '/data/local/tmp/frida-server &'"
 ```

@@ -30,7 +30,10 @@ import {
   configureFritapAgent,
   readFritapAbiVersion,
   gracefulDetachFritap,
+  withJavaBridgePatch,
+  FRITAP_JAVA_BRIDGE_PATCH_WARNING,
 } from '../../src/fritap/agent-loader.js';
+import { JAVA_BRIDGE_PATCH_MARKER } from '../../src/agent/java-bridge-patch.js';
 import { PINNED_AGENT_SHA256 } from '../../src/fritap/constants.js';
 import { FritapAgentUnavailableError } from '../../src/helpers/errors.js';
 import { sha256Hex } from '../../src/helpers/sanitize.js';
@@ -115,7 +118,7 @@ describe('locateFritapAgent', () => {
     const located = await locateFritapAgent({ skipPython: true, cacheDir, env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 }, allowDownload: false });
     expect(located.origin).toBe('cache');
     expect(located.version).toBe(DEFAULT_FRITAP_VERSION);
-    expect(located.version).toBe('v2.5.2');
+    expect(located.version).toBe('v2.6.5');
     expect(located.path).toBe(path.join(cacheDir, FRITAP_AGENT_FILENAME));
     expect(located.source).toBe(VALID_BUNDLE);
   });
@@ -167,7 +170,7 @@ describe('locateFritapAgent', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(downloaded.origin).toBe('download');
-    expect(downloaded.version).toBe('v2.5.2');
+    expect(downloaded.version).toBe('v2.6.5');
     expect(downloaded.source).toBe(VALID_BUNDLE);
 
     const cachedFile = path.join(cacheDir, FRITAP_AGENT_FILENAME);
@@ -175,7 +178,7 @@ describe('locateFritapAgent', () => {
     expect(fs.readFileSync(cachedFile, 'utf8')).toBe(VALID_BUNDLE);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0][0]).toBe(fritapDownloadUrl('v2.5.2'));
+    expect(fetchImpl.mock.calls[0][0]).toBe(fritapDownloadUrl('v2.6.5'));
 
     const cached = await locateFritapAgent({ allowDownload: false, skipPython: true, cacheDir, env: { FRITAP_AGENT_SHA256: VALID_BUNDLE_SHA256 } });
     expect(cached.origin).toBe('cache');
@@ -185,6 +188,11 @@ describe('locateFritapAgent', () => {
 
   it('pins the v2.5.2 agent by sha256', () => {
     expect(PINNED_AGENT_SHA256['v2.5.2']).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('pins the v2.6.5 agent (the default tag) by sha256', () => {
+    expect(PINNED_AGENT_SHA256['v2.6.5']).toBe('aaacf799749625fa75d2704f2022d57a1e7988615eb61ba1728c7a6dea0997a9');
+    expect(PINNED_AGENT_SHA256[DEFAULT_FRITAP_VERSION]).toBeDefined();
   });
 
   it('discards a download whose sha256 differs from the built-in pin', async () => {
@@ -444,5 +452,52 @@ describe('optional rpc exports', () => {
 
   it('gracefulDetachFritap resolves when the export is missing', async () => {
     await expect(gracefulDetachFritap({ exports: {} } as any)).resolves.toBeUndefined();
+  });
+});
+
+describe('Java bridge multi-script unload workaround', () => {
+  const BRIDGE_MODULE = 'Script.nextTick(() => {\n      VM.dispose(vm3);\n    });';
+  const BRIDGE_BUNDLE = `📦\n${Buffer.byteLength(BRIDGE_MODULE)} /agent/fritap_agent.js\n✄\n${BRIDGE_MODULE}`;
+  const located = (source: string) => ({ path: '/x/fritap_agent.js', source, version: 'v2.6.5', origin: 'cache' as const });
+
+  it('patches the embedded bridge in memory and reports the status', () => {
+    const result = withJavaBridgePatch(located(BRIDGE_BUNDLE));
+    expect(result.javaBridgePatch).toBe('patched');
+    expect(result.source).toContain(JAVA_BRIDGE_PATCH_MARKER);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('warns and keeps the source when the pattern is missing', () => {
+    const result = withJavaBridgePatch(located(VALID_BUNDLE));
+    expect(result.javaBridgePatch).toBe('pattern-not-found');
+    expect(result.source).toBe(VALID_BUNDLE);
+    expect(result.warnings).toEqual([FRITAP_JAVA_BRIDGE_PATCH_WARNING]);
+  });
+
+  it('verifies the pristine bundle and never mutates the cached file', async () => {
+    const cacheDir = path.join(tmpDir, 'cache');
+    const cachedFile = writeTmp(path.join('cache', FRITAP_AGENT_FILENAME), BRIDGE_BUNDLE);
+    const env = { FRITAP_AGENT_SHA256: sha256Hex(BRIDGE_BUNDLE) };
+    const result = await locateFritapAgent({ skipPython: true, cacheDir, env, allowDownload: false });
+    expect(result.origin).toBe('cache');
+    expect(result.javaBridgePatch).toBe('patched');
+    expect(fs.readFileSync(cachedFile, 'utf8')).toBe(BRIDGE_BUNDLE);
+    // A second lookup still matches the pin (the cache holds the original bytes).
+    expect((await locateFritapAgent({ skipPython: true, cacheDir, env })).origin).toBe('cache');
+  });
+});
+
+describe('Java bridge patch memoisation', () => {
+  const MODULE = 'Script.nextTick(() => {\n      VM.dispose(vm3);\n    });';
+  const BUNDLE = `📦\n${Buffer.byteLength(MODULE)} /agent/memo.js\n✄\n${MODULE}`;
+
+  it('returns the same patched source for the same path and content, flags the Java bridge and keeps warnings per call', () => {
+    const agent = { path: '/memo/fritap_agent.js', source: BUNDLE, version: 'v2.6.5', origin: 'cache' as const, warnings: ['x'] };
+    const first = withJavaBridgePatch(agent);
+    const second = withJavaBridgePatch(agent);
+    expect(second.source).toBe(first.source);
+    expect(second.javaBridgePatch).toBe('patched');
+    expect(second.usesJavaBridge).toBe(true);
+    expect(second.warnings).toEqual(['x']);
   });
 });

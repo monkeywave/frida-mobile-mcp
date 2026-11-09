@@ -34,6 +34,9 @@ jobs:
       # `frida` downloads its native prebuild from GitHub releases in its
       # install script (prebuild-install), so install scripts must run.
       # --foreground-scripts streams that output into the job log.
+      - name: Verify allowScripts matches the locked frida version
+        run: node .github/scripts/check-allow-scripts.mjs
+
       - run: npm ci --foreground-scripts
 
       - run: npm run build

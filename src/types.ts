@@ -1,6 +1,9 @@
 import type frida from 'frida';
 
 // Session entry stored in state
+/** Frida 17.26 attach realm: `emulated` targets the ARM side of a native-bridge (Houdini/libndk) app on x86 Android. */
+export type SessionRealm = 'native' | 'emulated';
+
 export interface SessionEntry {
   id: string;               // UUID
   session: frida.Session;
@@ -14,6 +17,7 @@ export interface SessionEntry {
   device?: frida.Device;    // cached frida.Device the session lives on
   detachReason?: string;    // set by the detach handler right before removal
   crash?: CrashSummary;     // set by the detach handler when frida reports a crash
+  realm?: SessionRealm;     // attach realm; absent means 'native' (part of the session identity)
   /** Script-runtime snapshots keyed by snapshotCacheKey() (src/agent/snapshots.ts); never retried once created. */
   snapshots?: Map<string, Buffer>;
   /** Snapshot cache keys whose creation failed on this session (unsupported runtime etc.); not retried. */

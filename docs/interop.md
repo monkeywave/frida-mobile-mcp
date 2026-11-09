@@ -195,7 +195,9 @@ Code to category mapping:
 | `CUSTOM_SCRIPTS_DISABLED`, `MEMORY_WRITE_DISABLED`                   | `authorization` | no        | `capability_unavailable` |
 | `DEVICE_NOT_FOUND`, `MOBILE_MCP_UNAVAILABLE`, `FRITAP_AGENT_UNAVAILABLE` | `capability` | no        | `capability_unavailable` |
 | `RPC_TIMEOUT`, `FRIDA_TIMEOUT`                                       | `timeout`       | yes       | `provider_timeout` |
-| `SESSION_NOT_FOUND`, `INVALID_ARGUMENT`, `SCRIPT_NOT_FOUND`, `PROCESS_NOT_FOUND` | `request` | no | `invalid_request` (`target_required` for `SESSION_NOT_FOUND` / `PROCESS_NOT_FOUND`) |
+| `SESSION_NOT_FOUND`, `INVALID_ARGUMENT`, `INVALID_ADDRESS`, `SCRIPT_NOT_FOUND`, `PROCESS_NOT_FOUND` | `request` | no | `invalid_request` (`target_required` for `SESSION_NOT_FOUND` / `PROCESS_NOT_FOUND`) |
+| `UNLOAD_ORDER_UNSAFE` | `request` | no | `invalid_request` (retry `unload_script` with `cascade: true`) |
+| `FRITAP_CAPTURE_ACTIVE` | `request` | no | `invalid_request` (a friTap capture already runs in that process; `unload_script` its `script_id` or `stop_instrumentation` first) |
 | `FRIDA_ERROR`, `SCRIPT_ERROR`, `SESSION_LOST`                        | `provider`      | no        | `unavailable` |
 
 The full code list (including `ADB_SHELL_DISABLED`, `NATIVE_INJECTION_DISABLED`,
@@ -230,9 +232,18 @@ Arguments:
 | `full_capture`     | `false` | Also buffer decrypted TLS plaintext records (and write a pcap when `pcap_path` is set), not only keys |
 | `duration_seconds` | `0`     | `0` keeps running until `stop_instrumentation`; max 600 |
 | `allow_download`   | `true`  | Permit fetching the pinned agent bundle from GitHub |
+| `protocols`        | `["tls"]` | friTap protocols to hook: `tls`, `rc4`, `auto`, `all` (`auto`/`all` alone) |
+| `pairip_safe`      | `false` | PairIP/anti-tamper apps: minimal symbol-only keylog on system BoringSSL (prefer `spawn: false`) |
+| `no_loader_hook`   | `false` | Skip the Android dynamic-loader hook (avoids anti-tamper crashes; later-loaded libraries are not hooked) |
+| `probe`            | `false` | Dry run: emit a `fritap_platform_report` message, install no hooks |
+| `attribute_sdk`    | `false` | Emit a `fritap_caller_stack` backtrace per TLS connection (which SDK/app code produced the traffic) |
+| `default_fd`       | `false` | Keep records with unresolvable sockets, using placeholder addresses |
+| `library_scan`     | `false` | Scan loaded modules for key-log callbacks to hook unknown TLS libraries |
+| `experimental`     | `false` | Enable friTap experimental hooks |
 
 Output: `session_id`, `script_id`, `agent_version`, `keylog_path` and `hooks`
 (the initial summary messages naming the TLS libraries that were hooked).
+Session stats include `per_library` counters. Compatible with friTap agent ABI 2 and 3 (friTap v2.6.5 is ABI 3).
 
 - The key log is NSS key log format (`CLIENT_RANDOM <random> <secret>`) and
   loads directly into Wireshark (`tls.keylog_file`) to decrypt a parallel
@@ -252,7 +263,7 @@ Agent discovery order:
 3. The cached download `~/.config/frida-mobile-mcp/fritap/<version>/fritap_agent.js`,
    fetched from
    `https://raw.githubusercontent.com/fkie-cad/friTap/<tag>/friTap/fritap_agent.js`.
-   The default tag is `v2.5.2`; `FRITAP_VERSION` overrides it; the download
+   The default tag is `v2.6.5` (agent ABI 2 and 3 are accepted); `FRITAP_VERSION` overrides it; the download
    happens only when `allow_download` is true.
 
 If none succeeds the tool returns `FRITAP_AGENT_UNAVAILABLE` (category
@@ -273,6 +284,26 @@ Worked example: correlating plaintext with a statically found wrapper.
    `fritap_datalog` records, confirming the wrapper is the producer; the
    backtrace lists the callers as `libfoo.so+0x...` entries.
 4. Ask ReVa to `decompile` each caller offset to document the call chain.
+
+## 4.1 friTap MCP hand-off
+
+friTap v2.6.5 ships its own MCP server (`pip install 'fritap[mcp]'`, run
+`fritap mcp`; capture needs `--allow-capture`). It offers `start_capture`,
+`capture_status`, `mark_phase`, `stop_capture` and analysis tools such as
+`get_digest`, `list_findings`, `find_values`, `diff` and `export`. The two
+servers complement each other:
+
+- Use `capture_tls` here when the capture must sit next to Frida hooks, UI
+  automation (`mobile_action`) and evidence IDs in one session, or to
+  diagnose crashes (`probe`, `pairip_safe`, `no_loader_hook`).
+- Use `fritap mcp` for deep traffic analysis: token-budgeted digests, leak
+  tracing of known values, capture diffs and HAR/Markdown export.
+- Hand-off: write `keylog_path` (and `pcap_path`) from `capture_tls`, then
+  decrypt the pcap with that key log in Wireshark, or analyse a fresh
+  phase-labelled capture in `fritap mcp`. Do not capture the same app with
+  both servers at once.
+
+The `tls_traffic_audit` prompt walks through this flow.
 
 ## 5. Static -> dynamic -> static walkthrough
 

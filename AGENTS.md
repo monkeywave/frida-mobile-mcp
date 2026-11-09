@@ -25,7 +25,7 @@ Node >= 22.12. CI (`.github/workflows/ci.yml`) runs build, lint, test, the CLI s
 - User scripts (`kind: 'user'`) run through `Script.evaluate(name, source)` to keep their line numbers; ES modules are compiled host-side by `src/agent/compiler.ts` (frida `Compiler`); sources starting with `FRIDA_COMPILE_BUNDLE_MARKER` (`📦\n`) pass through untouched.
 - Android kills a spawned process that stays suspended for more than ~10 s. Resume before anything that waits on `Java.perform` (see `src/tools/explore.ts`).
 - Native addresses use the shared notation from `src/agent/address.ts` (`module!symbol`, `module+0xoff`, `0x...`, bare global export); return `module+0xoff` wherever possible. Keep `docs/interop.md` in sync when changing it.
-- frida-node version is pinned to `^17.24.x`; the device needs frida-server 17.x. Do not bump the major without updating README, docs/clients.md and `src/cli/doctor.ts`.
+- frida-node version is pinned to `^17.26.x`; the device needs frida-server 17.x. Do not bump the major without updating README, docs/clients.md and `src/cli/doctor.ts`.
 
 ## Where things live
 
@@ -46,7 +46,7 @@ Node >= 22.12. CI (`.github/workflows/ci.yml`) runs build, lint, test, the CLI s
 | `src/resources.ts`, `src/prompts.ts` | `frida://` resources and workflow prompts |
 | `build/bundle-bridges.mjs` | Rollup bundling of frida-java-bridge / frida-objc-bridge into classic IIFEs |
 | `docs/clients.md`, `docs/interop.md` | Client setup / HTTP mode; address contract, envelope, static-tool interop |
-| `skills/mobile-dynamic-analysis/SKILL.md` | Agent skill shipped in the npm package (`files`) |
+| `skills/mobile-dynamic-analysis/SKILL.md` | Agent skill shipped in the npm package (`files`); long detail lives in `references/tools.md` and `references/fritap.md` (served as `frida://skills/mobile-dynamic-analysis/references/{file}`) |
 | `server.json`, `manifest.json` | MCP registry entry and MCPB manifest; keep tool lists and versions in step with the code |
 
 ## Conventions

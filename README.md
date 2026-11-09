@@ -44,12 +44,12 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 ## Requirements
 
 - Node.js >= 22.12 (CI runs 22 and 24 on Linux, macOS and Windows). `npm install` runs the `frida` package's install script, which downloads the native frida-node prebuild.
-- A device or emulator running **frida-server 17.x**. This package depends on frida-node `^17.24.3`; frida-server on the device must have the same major version (17) and ideally the same minor version. `frida-mobile-mcp doctor` prints both versions and flags mismatches.
+- A device or emulator running **frida-server 17.x**. This package depends on frida-node `^17.26.2`; frida-server on the device should be 17.26.x (same major is required, same minor is recommended; `realm: 'emulated'` needs >= 17.26). `frida-mobile-mcp doctor` prints both versions and flags mismatches.
 - Android: download the matching `frida-server-17.x.y-android-<arch>.xz` from <https://github.com/frida/frida/releases>, then
 
   ```bash
-  xz -d frida-server-17.24.3-android-arm64.xz
-  adb push frida-server-17.24.3-android-arm64 /data/local/tmp/frida-server
+  xz -d frida-server-17.26.2-android-arm64.xz
+  adb push frida-server-17.26.2-android-arm64 /data/local/tmp/frida-server
   adb shell "chmod 755 /data/local/tmp/frida-server"
   adb shell "su -c '/data/local/tmp/frida-server &'"
   ```
@@ -91,15 +91,15 @@ Per-client instructions, HTTP mode and remote frida-server setup are in [docs/cl
 | `validate_script` | Syntax, type and Frida 17 removed-API check without a device. Use before `execute_script`. |
 | `run_prebuilt_script` | Run one of the 9 prebuilt scripts below; call without `script_name` to list them. |
 | `bypass_ssl_pinning` | One-click pinning bypass (Android: TrustManager, OkHttp CertificatePinner, Conscrypt; iOS: SecTrust, ATS, BoringSSL). |
-| `capture_tls` | friTap: TLS session keys (NSS key log) and optional decrypted plaintext / synthetic pcap for OpenSSL/BoringSSL, Conscrypt, NSS, GnuTLS, wolfSSL, mbedTLS, Secure Transport and more. Accepts friTap `patterns`/`offsets` (e.g. from `generate_memory_pattern` or BoringSecretHunter) for stripped libraries. |
+| `capture_tls` | friTap: TLS session keys (NSS key log) and optional decrypted plaintext / synthetic pcap for OpenSSL/BoringSSL, Conscrypt, NSS, GnuTLS, wolfSSL, mbedTLS, Secure Transport and more. Accepts friTap `patterns`/`offsets` (e.g. from `generate_memory_pattern` or BoringSecretHunter) for stripped libraries. Options: `protocols` (`tls`/`rc4`/`auto`/`all`), `pairip_safe`, `no_loader_hook`, `probe`, `attribute_sdk` (per-connection `fritap_caller_stack`), `default_fd`, `library_scan`, `experimental`; stats include `per_library`. friTap v2.6.5, agent ABI 2 and 3. Use the `tls_traffic_audit` prompt for a guided flow; `fritap mcp` can analyse the resulting key log/pcap (see docs/interop.md). |
 | `read_memory` | Read up to 4 MB at any address notation; returns hex plus absolute address and `module+offset`. |
 | `write_memory` | Write hex bytes to memory. Disabled unless `memoryWriteEnabled`. |
 | `scan_memory` | Byte-pattern scan (`48 89 5c 24 ?? 57`), optionally limited to a module. |
-| `get_messages` | Buffered hook invocations, trace hits, `send()` output and errors; `since` paginates. |
+| `get_messages` | Buffered hook invocations, trace hits, `send()` output and errors; `since` paginates; the cursor (`last_index`) points after the last returned message, with `truncated` and `remaining`. |
 | `get_evidence` | Re-read a persisted tool result (params, status, structured result) by `evidence_id`. |
 | `export_evidence_bundle` | Export persisted results as a JSON or Markdown bundle, inline or to a file. |
-| `stop_instrumentation` | Remove all hooks, scripts and traces on a target and detach. |
-| `unload_script` | Unload a single script (hook, trace or custom) from a session while keeping it attached. |
+| `stop_instrumentation` | Remove all hooks, scripts and traces on a target and detach (newest script first; eternalized scripts are skipped). Returns `fritap_captures[]` with final friTap stats. |
+| `unload_script` | Unload a single script (hook, trace or custom) from a session while keeping it attached. Fails with `UNLOAD_ORDER_UNSAFE` if newer Java-bridge scripts are loaded; `cascade: true` unloads them first (`cascaded_scripts`). |
 | `mobile_action` | Gateway to mobile-mcp UI automation (screenshot, elements, tap, swipe, type, launch app, list apps). |
 | `search_recipes` | Search the purpose-indexed library of ready-to-run classic-JS recipes (custom crypto-key capture, native/JNI hooks, classloader/intent/WebView, iOS Keychain); returns ranked recipes with source to adapt and run via `execute_script`. |
 | `save_script` | Save a script under `~/.config/frida-mobile-mcp/scripts` for reuse. Requires `allowCustomScripts`. |
@@ -256,8 +256,8 @@ Config file `~/.config/frida-mobile-mcp/config.json` (merged over defaults, then
 | `FRIDA_MCP_BRIDGES_DIR` | `dist/bridges` | Directory with the bundled `java.js`/`objc.js` bridges |
 | `FRIDA_MCP_COMPILER_PROJECT_DIR` | `$TMPDIR/frida-mobile-mcp/compiler-project` | Project dir the Frida Compiler uses for ES module scripts |
 | `FRITAP_AGENT_PATH` | unset | Path to a `fritap_agent.js` bundle for `capture_tls` |
-| `FRITAP_VERSION` | `v2.5.2` | friTap tag to download when no local agent is found |
-| `FRITAP_AGENT_SHA256` | pinned for `v2.5.2` | Bare sha256 of the downloaded friTap agent for the selected `FRITAP_VERSION` tag; a mismatch refuses the bundle |
+| `FRITAP_VERSION` | `v2.6.5` | friTap tag to download when no local agent is found |
+| `FRITAP_AGENT_SHA256` | pinned for `v2.6.5` | Bare sha256 of the downloaded friTap agent for the selected `FRITAP_VERSION` tag; a mismatch refuses the bundle |
 
 ## Security guardrails
 

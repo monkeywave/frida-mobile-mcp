@@ -25,12 +25,13 @@ import { responseFormatSchema } from '../../constants.js';
 import { createAgentScript } from '../../agent/script-factory.js';
 import { RESOLVE_TARGET_SNIPPET } from '../../agent/address.js';
 import { callRpcWithTimeout } from '../../helpers/rpc-timeout.js';
+import { SAFE_RANGE_LOOKUP_SNIPPET } from '../memory.js';
 
 // ---------------------------------------------------------------------------
 // Agent sources (classic JS; RESOLVE_TARGET_SNIPPET is prepended at load time)
 // ---------------------------------------------------------------------------
 
-const RESOLVE_ADDRESS_SOURCE = `
+export const RESOLVE_ADDRESS_SOURCE = SAFE_RANGE_LOOKUP_SNIPPET + `
   rpc.exports.run = function () {
     var o = __FRIDA_MCP__.options;
     var parsed = parseTargetSpec(o.target);
@@ -42,7 +43,7 @@ const RESOLVE_ADDRESS_SOURCE = `
     var mod = Process.findModuleByAddress(p);
     d.module_base = mod ? mod.base.toString() : null;
     d.module_path = mod ? mod.path : null;
-    var range = Process.findRangeByAddress(p);
+    var range = rangeAt(p);
     d.protection = range ? range.protection : null;
     return d;
   };

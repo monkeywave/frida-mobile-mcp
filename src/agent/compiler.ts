@@ -8,6 +8,8 @@
  *
  *   1. symlink (or copy, when symlinks are not permitted) the packages from this package's own
  *      `node_modules` when they are present (they are devDependencies, so a dev checkout has them);
+ *      `frida-java-bridge` is always copied, because its index.js is patched in place with the
+ *      multi-script unload workaround (see java-bridge-patch.ts);
  *   2. otherwise fall back to `frida.PackageManager().install(...)`, which downloads them from
  *      the npm registry — this path needs network access the first time it runs.
  *
@@ -28,6 +30,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -37,6 +40,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../helpers/logger.js';
 import { ScriptError } from '../helpers/errors.js';
+import { skipJavaBridgeThreadDetach, type JavaBridgePatchStatus } from './java-bridge-patch.js';
 
 export type CompilerTypeCheck = 'full' | 'none';
 export type CompilerLanguage = 'auto' | 'ts' | 'js';
@@ -94,8 +98,10 @@ const PROJECT_PACKAGE_JSON = {
   type: 'module',
 };
 
+const JAVA_BRIDGE_PACKAGE = 'frida-java-bridge';
+
 const DEPENDENCIES: readonly DependencySpec[] = [
-  { name: 'frida-java-bridge', spec: 'frida-java-bridge@7', required: true },
+  { name: JAVA_BRIDGE_PACKAGE, spec: 'frida-java-bridge@7', required: true },
   { name: 'frida-objc-bridge', spec: 'frida-objc-bridge@8', required: true },
   { name: '@types/frida-gum', spec: '@types/frida-gum', required: false },
 ];
@@ -210,6 +216,83 @@ function removeIfPresent(target: string): void {
   }
 }
 
+function isSymlink(target: string): boolean {
+  try {
+    return lstatSync(target).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Install a locally available package into the project. The Java bridge is always copied (never
+ * symlinked) because its index.js gets patched in place, and the original must stay untouched.
+ * Exported as a test hook.
+ */
+export function installLocalPackage(
+  projectRoot: string,
+  name: string,
+  sourceDir: string,
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (name !== JAVA_BRIDGE_PACKAGE) {
+    linkPackage(projectRoot, name, sourceDir, platform);
+    return;
+  }
+  const target = path.join(projectRoot, 'node_modules', name);
+  mkdirSync(path.dirname(target), { recursive: true });
+  removeIfPresent(target);
+  copyPackage(target, sourceDir);
+}
+
+/** Like needsRefresh, but also replaces a Java bridge symlink left behind by older versions. */
+function needsLocalInstall(projectRoot: string, name: string, sourceDir: string): boolean {
+  if (needsRefresh(projectRoot, name, sourceDir)) return true;
+  return name === JAVA_BRIDGE_PACKAGE && isSymlink(path.join(projectRoot, 'node_modules', name));
+}
+
+/**
+ * Apply the multi-script unload workaround (see java-bridge-patch.ts) to the project's own copy
+ * of frida-java-bridge. Idempotent; refuses to write through a symlink so the shared original is
+ * never modified, and warns when upstream no longer contains the expected pattern. Exported as a
+ * test hook.
+ */
+export function patchProjectJavaBridge(projectRoot: string): JavaBridgePatchStatus | 'skipped' {
+  const packageDir = path.join(projectRoot, 'node_modules', JAVA_BRIDGE_PACKAGE);
+  const indexFile = path.join(packageDir, 'index.js');
+  if (isSymlink(packageDir) || !existsSync(indexFile)) {
+    log('warn', `${JAVA_BRIDGE_PACKAGE} in ${projectRoot} is not a patchable copy; multi-script unload may crash`);
+    return 'skipped';
+  }
+  if (fileFingerprint(indexFile) === patchedIndexFingerprints.get(indexFile)) return 'already-patched';
+  const result = skipJavaBridgeThreadDetach(readFileSync(indexFile, 'utf8'));
+  if (result.status === 'patched') writeFileSync(indexFile, result.source);
+  if (result.status === 'pattern-not-found') {
+    log('warn', `VM.dispose(vm) call not found in ${indexFile}; Java bridge unload workaround not applied`);
+  } else {
+    patchedIndexFingerprints.set(indexFile, fileFingerprint(indexFile));
+  }
+  return result.status;
+}
+
+/** index.js files already carrying the workaround, by size+mtime, so an untouched copy is not re-read. */
+const patchedIndexFingerprints = new Map<string, string>();
+
+function fileFingerprint(file: string): string {
+  const { size, mtimeMs } = statSync(file);
+  return `${size}:${mtimeMs}`;
+}
+
+/**
+ * Whether a compiled (frida-compile) bundle embeds frida-java-bridge, judged from the module
+ * paths in the bundle header rather than from the module sources.
+ */
+export function compiledBundleUsesJavaBridge(bundle: string): boolean {
+  const headerEnd = bundle.indexOf('\n✄\n');
+  const header = headerEnd < 0 ? '' : bundle.slice(0, headerEnd);
+  return new RegExp(`^\\d+ \\S*node_modules/${JAVA_BRIDGE_PACKAGE}/`, 'm').test(header);
+}
+
 async function installFromRegistry(projectRoot: string, deps: DependencySpec[]): Promise<void> {
   const specs = deps.map((d) => d.spec);
   log('info', `Installing compiler dependencies from the npm registry (network required): ${specs.join(', ')}`);
@@ -223,7 +306,7 @@ async function populateDependencies(projectRoot: string): Promise<void> {
   for (const dep of DEPENDENCIES) {
     const local = findLocalPackage(dep.name);
     if (local) {
-      if (needsRefresh(projectRoot, dep.name, local)) linkPackage(projectRoot, dep.name, local);
+      if (needsLocalInstall(projectRoot, dep.name, local)) installLocalPackage(projectRoot, dep.name, local);
     } else if (!isInstalled(projectRoot, dep.name)) {
       missing.push(dep);
     }
@@ -237,6 +320,7 @@ async function populateDependencies(projectRoot: string): Promise<void> {
   } else if (missing.length > 0) {
     log('debug', `Optional compiler dependencies not found locally, skipped: ${missing.map((d) => d.name).join(', ')}`);
   }
+  patchProjectJavaBridge(projectRoot);
 }
 
 let projectReady: Promise<string> | null = null;

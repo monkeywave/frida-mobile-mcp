@@ -34,6 +34,7 @@ import {
   TEST_CONFIG,
   type McpHarness,
 } from '../helpers/mock-fixtures.js';
+import { EARLY_RESUME_SESSION_NOTE } from '../../src/helpers/session-helper.js';
 
 describe('trace_method MCP tool handler', () => {
   let client: McpHarness['client'];
@@ -77,7 +78,8 @@ describe('trace_method MCP tool handler', () => {
     expect(parsed.result.invocations_count).toBe(0);
     expect(parsed.result.truncated).toBe(false);
     expect(parsed.result.interceptor_options).toBeNull();
-    expect(parsed.limitations).toEqual([]);
+    // The target was not running: the session note is the only limitation.
+    expect(parsed.limitations).toEqual([EARLY_RESUME_SESSION_NOTE]);
     expect(script.load).toHaveBeenCalledTimes(1);
     expect(script.unload).toHaveBeenCalledTimes(1);
     // The transient trace is removed from state once the duration elapses.
@@ -93,7 +95,8 @@ describe('trace_method MCP tool handler', () => {
     });
 
     expect(parsed.result.interceptor_options).toEqual({ relocation: 'unchecked' });
-    expect(parsed.limitations).toEqual([]);
+    // The target was not running: the session note is the only limitation.
+    expect(parsed.limitations).toEqual([EARLY_RESUME_SESSION_NOTE]);
   });
 
   it('drops interceptor_options for a Java trace but reports the limitation', async () => {
@@ -105,7 +108,7 @@ describe('trace_method MCP tool handler', () => {
     });
 
     expect(parsed.result.interceptor_options).toBeNull();
-    expect(parsed.limitations[0]).toMatch(/ignored for this java hook/);
+    expect(parsed.limitations).toContainEqual(expect.stringMatching(/ignored for this java hook/));
   });
 
   it('traces inside an existing session by session_id without spawning', async () => {

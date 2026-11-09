@@ -67,7 +67,7 @@ function normaliseHex(hex: string): string {
   return `0x${hex.slice(2).toLowerCase()}`;
 }
 
-function normaliseOffset(offset: number | bigint | string): string {
+export function normaliseOffset(offset: number | bigint | string): string {
   if (typeof offset === 'number' || typeof offset === 'bigint') {
     if (offset < 0) throw new Error('Offset must be non-negative');
     return `0x${offset.toString(16)}`;

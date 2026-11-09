@@ -6,6 +6,8 @@ import { FridaMcpError } from './errors.js';
 import { getCharacterLimit, ResponseFormat } from '../constants.js';
 
 const MAX_MARKDOWN_DEPTH = 10;
+/** Markdown renders at most this many items of an array of objects ("...and N more" for the rest). */
+export const MARKDOWN_MAX_LIST_ITEMS = 30;
 const keyCache = new Map<string, string>();
 const INDENTS = Array.from({ length: MAX_MARKDOWN_DEPTH + 1 }, (_, i) => '  '.repeat(i));
 
@@ -37,22 +39,42 @@ export function buildErrorResult(error: FridaMcpError): ErrorResponse {
   return error.toErrorResponse();
 }
 
-export function formatToolResponse(
-  result: ToolResult | ErrorResponse,
-  format: ResponseFormat = ResponseFormat.TOON,
-): {
+export type ToolResponse = {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
   _meta?: Record<string, unknown>;
-} {
+};
+
+/** An array the formatter cut to fit the response character limit. */
+export interface TrimmedArray {
+  label: string;
+  kept: number;
+  originalLength: number;
+}
+
+export function formatToolResponse(
+  result: ToolResult | ErrorResponse,
+  format: ResponseFormat = ResponseFormat.TOON,
+): ToolResponse {
+  return formatToolResponseDetailed(result, format).response;
+}
+
+/** Like formatToolResponse, but also reports which arrays were trimmed (empty when the text fit). */
+export function formatToolResponseDetailed(
+  result: ToolResult | ErrorResponse,
+  format: ResponseFormat = ResponseFormat.TOON,
+): { response: ToolResponse; trimmed: TrimmedArray[] } {
   if ('error' in result) {
     // `_meta.error` carries the structured error body so handler decorators (the evidence
     // store) can persist it without parsing the rendered text.
     return {
-      content: [{ type: 'text', text: renderText(result, format) }],
-      isError: true,
-      _meta: { evidence_id: result.error.evidence_id, error: result.error },
+      response: {
+        content: [{ type: 'text', text: renderText(result, format) }],
+        isError: true,
+        _meta: { evidence_id: result.error.evidence_id, error: result.error },
+      },
+      trimmed: [],
     };
   }
 
@@ -60,12 +82,15 @@ export function formatToolResponse(
   // structure mid-way (which turned a 342-module JSON response into unparseable text).
   // Instead we trim the largest array in a clone and re-render, so the output stays valid
   // JSON/TOON/Markdown; structuredContent below always carries the full, untrimmed result.
-  const text = fitRenderedResult(result, format, getCharacterLimit());
+  const { text, trimmed } = fitRenderedResult(result, format, getCharacterLimit());
 
   return {
-    content: [{ type: 'text', text }],
-    structuredContent: { ...result } as Record<string, unknown>,
-    _meta: { evidence_id: result.evidence_id },
+    response: {
+      content: [{ type: 'text', text }],
+      structuredContent: { ...result } as Record<string, unknown>,
+      _meta: { evidence_id: result.evidence_id },
+    },
+    trimmed,
   };
 }
 
@@ -111,13 +136,18 @@ function collectArrayHandles(clone: ToolResult): ArrayHandle[] {
  * (e.g. discover_crypto's java + native + candidates) is trimmed evenly instead of falling back
  * to an empty envelope. structuredContent still carries the full, untrimmed data.
  */
-function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: number): string {
+function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: number): { text: string; trimmed: TrimmedArray[] } {
   let text = renderText(result, format);
-  if (text.length <= limit) return text;
+  const listCapped = format === ResponseFormat.MARKDOWN && hasMarkdownCappedList(result);
+  if (text.length <= limit && !listCapped) return { text, trimmed: [] };
 
+  let trimmed: TrimmedArray[] = [];
   const limitations: string[] = [...(result.limitations ?? [])];
   const clone: ToolResult = { ...result, limitations };
   const handles = collectArrayHandles(clone);
+  // Markdown shows only MARKDOWN_MAX_LIST_ITEMS items of an object array: report that cut as a
+  // trim too, so callers paging on `trimmed` (get_messages) never skip items the text hid.
+  if (listCapped) capMarkdownLists(handles);
 
   if (handles.length > 0) {
     // Trim to a slightly tighter budget so the truncation note we add afterwards (which isn't
@@ -141,17 +171,18 @@ function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: nu
       if (largest.kept < 0) largest.kept = 0;
     }
 
-    const trimmed = handles.filter((h) => h.kept < h.originalLength);
+    trimmed = handles.filter((h) => h.kept < h.originalLength).map(({ label, kept, originalLength }) => ({ label, kept, originalLength }));
     if (trimmed.length > 0) {
       const parts = trimmed.map((h) => `${h.kept} of ${h.originalLength} \`${h.label}\``);
+      const reason = listCapped ? `the Markdown list cap (${MARKDOWN_MAX_LIST_ITEMS} items) and the ${limit}-char response limit` : `the ${limit}-char response limit`;
       limitations.push(
-        `Result truncated to fit the ${limit}-char response limit: showing ${parts.join(', ')}. ` +
+        `Result truncated to fit ${reason}: showing ${parts.join(', ')}. ` +
           `Request the rest with pagination (limit/offset/since) or read the full structuredContent.`,
       );
       clone.coverage = truncatedCoverage(result.coverage);
     }
     text = renderText(clone, format);
-    if (text.length <= limit) return text;
+    if (text.length <= limit) return { text, trimmed };
   }
 
   // Non-array fields alone exceed the limit: emit a minimal, valid envelope rather than an
@@ -164,7 +195,29 @@ function fitRenderedResult(result: ToolResult, format: ResponseFormat, limit: nu
     },
     coverage: truncatedCoverage(result.coverage),
   };
-  return renderText(minimal, format);
+  return { text: renderText(minimal, format), trimmed };
+}
+
+/** Whether a top-level array of the payload is longer than Markdown renders (formatArray's cap). */
+function hasMarkdownCappedList(result: ToolResult): boolean {
+  const payload = result.result;
+  const arrays = Array.isArray(payload) ? [payload] : payload && typeof payload === 'object' ? Object.values(payload) : [];
+  return arrays.some((v) => Array.isArray(v) && isMarkdownCappedList(v));
+}
+
+function isMarkdownCappedList(arr: readonly unknown[]): boolean {
+  return arr.length > MARKDOWN_MAX_LIST_ITEMS && !isScalarList(arr);
+}
+
+/** Clamp each Markdown-capped array handle to the items Markdown actually shows. */
+function capMarkdownLists(handles: ArrayHandle[]): void {
+  for (const h of handles) {
+    if (isMarkdownCappedList(h.slice())) h.kept = MARKDOWN_MAX_LIST_ITEMS;
+  }
+}
+
+function isScalarList(arr: readonly unknown[]): boolean {
+  return arr.every((v) => typeof v !== 'object' || v === null);
 }
 
 /**
@@ -300,7 +353,7 @@ function formatArray(label: string, arr: unknown[], lines: string[], depth: numb
     return;
   }
 
-  if (arr.every((v) => typeof v !== 'object' || v === null)) {
+  if (isScalarList(arr)) {
     if (arr.length <= 5) {
       lines.push(`${indent(depth)}- **${label}**: ${arr.map(formatScalar).join(', ')}`);
     } else {
@@ -310,7 +363,7 @@ function formatArray(label: string, arr: unknown[], lines: string[], depth: numb
   }
 
   lines.push(`${indent(depth)}**${label}** (${arr.length}):`);
-  const maxItems = 30;
+  const maxItems = MARKDOWN_MAX_LIST_ITEMS;
   for (let i = 0; i < Math.min(arr.length, maxItems); i++) {
     const item = arr[i];
     if (item && typeof item === 'object') {

@@ -108,11 +108,17 @@ describe('loadBridgeSource', () => {
 });
 
 describe('java bundle: multi-script unload workaround', () => {
-  it('neutralises the bridge runtime-level Script.bindWeak during module evaluation', () => {
-    // See build/bundle-bridges.mjs: frida-java-bridge 7.0.13 detaches the JS thread from the VM
-    // when the first script that attached it unloads, crashing sibling scripts on DeleteGlobalRef.
+  // See src/agent/java-bridge-patch.ts: frida-java-bridge 7.0.13 detaches the JS thread from the VM
+  // when the first script that attached it unloads, crashing sibling scripts on DeleteGlobalRef.
+  it('keeps the runtime-level dispose so hooks are reverted on unload', () => {
     const source = loadBridgeSource('java');
-    expect(source).toContain('Script.bindWeak=function(){return 0}');
-    expect(source.trimEnd().endsWith('Script.bindWeak=e}();') || /Script\.bindWeak=[A-Za-z_$]+\}\(\);\s*$/.test(source)).toBe(true);
+    expect(source).toMatch(/Script\.bindWeak\([\w$]+,\(\)=>\{[\w$]+\._dispose\(\)\}\)/);
+    expect(source).toMatch(/_disposeAll\([\w$]+\),[\w$]+\.dispose\([\w$]+\)\}\)/);
+    expect(source).not.toContain('Script.bindWeak=function(){return 0}');
+  });
+
+  it('no longer detaches the JS thread from Runtime._dispose', () => {
+    const source = loadBridgeSource('java');
+    expect(source).toMatch(/_disposeAll\([\w$]+\),[\w$]+\.dispose\([\w$]+\)\}\),Script\.nextTick\(\(\)=>\{\}\)/);
   });
 });

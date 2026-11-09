@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { registerMessagesTool, findEvictionLoss, messagesEvidenceMeta } from '../../src/tools/messages.js';
+import {
+  registerMessagesTool,
+  findEvictionLoss,
+  messagesEvidenceMeta,
+  pageCountAfterTrim,
+  cutMessagePayload,
+  fitMessagesPage,
+  type MessagesPageRenderer,
+} from '../../src/tools/messages.js';
 import { initState, getState } from '../../src/state.js';
 import { loadConfig } from '../../src/config.js';
 import {
@@ -110,6 +118,35 @@ describe('get_messages MCP tool', () => {
     expect(next.result.messages.every((m: Json) => m.seq > more.args.since)).toBe(true);
   });
 
+  it('markdown: pages never skip messages hidden by the Markdown list cap', async () => {
+    const state = getState();
+    seedSession(state, [scriptEntry(SCRIPT_A, fakeScript())]);
+    for (let i = 0; i < 250; i++) addMessage(SCRIPT_A, 'hook_invocation', { i });
+
+    const seenSeqs: number[] = [];
+    let since = 0;
+    for (let guard = 0; guard < 20; guard++) {
+      const response = (await client.callTool({
+        name: 'get_messages',
+        arguments: { session_id: DEFAULT_SESSION_ID, since, limit: 100, response_format: 'markdown' },
+      })) as Json;
+      const text: string = response.content[0].text;
+      const result = response.structuredContent.result as Json;
+      const shownSeqs = [...text.matchAll(/\*\*Seq\*\*: (\d+)/g)].map((m) => Number(m[1]));
+      expect(result.messages.length).toBeLessThanOrEqual(30);
+      expect(text).not.toMatch(/and \d+ more/);
+      expect(shownSeqs).toEqual(result.messages.map((m: Json) => m.seq));
+      expect(result.last_index).toBe(shownSeqs.at(-1));
+      seenSeqs.push(...shownSeqs);
+      if (!result.truncated) break;
+      since = result.last_index;
+    }
+
+    const allSeqs = getState().sessions.get(DEFAULT_SESSION_ID)!.scripts.get(SCRIPT_A)!.messages.map((m) => m.seq);
+    expect(seenSeqs).toEqual(allSeqs);
+    expect(seenSeqs).toHaveLength(250);
+  });
+
   it('paginates across multiple scripts without skipping or duplicating messages', async () => {
     const state = getState();
     seedSession(state, [scriptEntry(SCRIPT_A, fakeScript()), scriptEntry(SCRIPT_B, fakeScript())]);
@@ -131,6 +168,93 @@ describe('get_messages MCP tool', () => {
 
     // Every message exactly once, in global order.
     expect(seen).toEqual(['a0', 'b0', 'a1', 'b1']);
+  });
+
+  it('moves the cursor only past messages actually shown when the response limit trims the page', async () => {
+    seedSession(getState(), [scriptEntry(SCRIPT_A, fakeScript())]);
+    const big = 'x'.repeat(2000);
+    for (let i = 0; i < 40; i++) addMessage(SCRIPT_A, 'send', { i, big });
+
+    const seen: number[] = [];
+    let since: number | undefined;
+    let pages = 0;
+    for (;;) {
+      const page = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, limit: 100, response_format: 'json', ...(since !== undefined ? { since } : {}) });
+      pages++;
+      seen.push(...page.result.messages.map((m: Json) => m.payload.i));
+      expect(page.result.messages_count).toBe(page.result.messages.length);
+      if (!page.result.truncated) break;
+      expect(page.result.remaining).toBeGreaterThan(0);
+      expect(page.coverage.next_offset).toBe(page.result.last_index);
+      since = page.result.last_index;
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(seen).toEqual(Array.from({ length: 40 }, (_, i) => i));
+  });
+
+  for (const format of ['markdown', 'toon'] as const) {
+    it(`pages a trimmed ${format} response with the cursor on the last message present in the text`, async () => {
+      seedSession(getState(), [scriptEntry(SCRIPT_A, fakeScript())]);
+      const big = 'y'.repeat(1500);
+      for (let i = 0; i < 60; i++) addMessage(SCRIPT_A, 'send', { tag: `<m${i}>`, big });
+
+      const seen: number[] = [];
+      let since: number | undefined;
+      let pages = 0;
+      for (;;) {
+        const response = (await client.callTool({
+          name: 'get_messages',
+          arguments: { session_id: DEFAULT_SESSION_ID, limit: 100, response_format: format, ...(since !== undefined ? { since } : {}) },
+        })) as Json;
+        pages++;
+        const text: string = response.content[0].text;
+        const page = response.structuredContent.result;
+        const shown: number[] = page.messages.map((m: Json) => Number(/<m(\d+)>/.exec(m.payload.tag)![1]));
+        // Untrimmed render: every returned message (and the cursor's message) is in the text.
+        expect(text).not.toMatch(/Result truncated to fit/);
+        for (const i of shown) expect(text).toContain(`<m${i}>`);
+        expect(page.last_index).toBe(page.messages.at(-1).seq);
+        const next = shown.at(-1)! + 1;
+        if (next < 60) expect(text).not.toContain(`<m${next}>`);
+        seen.push(...shown);
+        if (!page.truncated) break;
+        since = page.last_index;
+      }
+      expect(pages).toBeGreaterThan(1);
+      expect(seen).toEqual(Array.from({ length: 60 }, (_, i) => i));
+    });
+  }
+
+  it('never returns more than the requested limit even when the response is trimmed', async () => {
+    seedSession(getState(), [scriptEntry(SCRIPT_A, fakeScript())]);
+    const big = 'z'.repeat(3000);
+    for (let i = 0; i < 40; i++) addMessage(SCRIPT_A, 'send', { i, big: i === 0 ? big.repeat(10) : 'small' });
+    const page = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, limit: 3 });
+    expect(page.result.messages.length).toBeLessThanOrEqual(3);
+    expect(page.result.last_index).toBe(page.result.messages.at(-1).seq);
+  });
+
+  it('returns a single oversized message with a cut payload and the cursor after it', async () => {
+    seedSession(getState(), [scriptEntry(SCRIPT_A, fakeScript())]);
+    addMessage(SCRIPT_A, 'send', { huge: 'h'.repeat(200_000) });
+    addMessage(SCRIPT_A, 'send', { small: true });
+
+    const page = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID });
+
+    expect(page.result.messages).toHaveLength(1);
+    expect(page.result.messages[0]).toMatchObject({ payload_truncated: true, payload_chars: expect.any(Number) });
+    expect(page.result.truncated).toBe(true);
+    expect(page.result.remaining).toBe(1);
+    expect(page.result.last_index).toBe(page.result.messages[0].seq);
+    expect(page.limitations.some((l: string) => /payload was cut/.test(l))).toBe(true);
+  });
+
+  it('reports remaining when the limit parameter truncates', async () => {
+    seedSession(getState(), [scriptEntry(SCRIPT_A, fakeScript())]);
+    for (let i = 0; i < 5; i++) addMessage(SCRIPT_A, 'send', { i });
+    const page = await callJson(client, 'get_messages', { session_id: DEFAULT_SESSION_ID, limit: 2 });
+    expect(page.result.truncated).toBe(true);
+    expect(page.result.remaining).toBe(3);
   });
 
   it('returns an empty set with last_index echoing the since cursor when nothing is buffered', async () => {
@@ -204,5 +328,72 @@ describe('findEvictionLoss / messagesEvidenceMeta', () => {
     ],
   ] as const)('builds coverage when %s', (_label, limitHit, lastEvictedSeq, limitations, coverage) => {
     expect(messagesEvidenceMeta('s1', 9, limitHit, lastEvictedSeq, 10)).toEqual({ limitations, coverage });
+  });
+});
+
+describe('pageCountAfterTrim', () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ script_id: 's', index: i, seq: i + 1, timestamp: 0, type: 'send', payload: 'x' }));
+  const size = JSON.stringify(rows[0]).length;
+  const trimmed = (kept: number) => [{ label: 'messages', kept, originalLength: 10 }];
+
+  it('extends the formatter cut by the unused room and never goes below one', () => {
+    expect(pageCountAfterTrim(rows, trimmed(3), 900, 1000)).toBe(3 + Math.floor(100 / size) > 10 ? 10 : 3 + Math.floor(100 / size));
+    expect(pageCountAfterTrim(rows, trimmed(0), 1000, 1000)).toBe(1);
+    expect(pageCountAfterTrim(rows, trimmed(5), 5000, 1000)).toBe(5);
+    expect(pageCountAfterTrim(rows, [{ label: 'active_scripts', kept: 0, originalLength: 3 }], 1000, 1000)).toBe(1);
+  });
+
+  it('never exceeds min(requested limit, matched.length)', () => {
+    expect(pageCountAfterTrim(rows, trimmed(5), 0, 1_000_000, 4)).toBe(4);
+    expect(pageCountAfterTrim(rows, trimmed(8), 0, 1_000_000, 2)).toBe(2);
+    expect(pageCountAfterTrim(rows, trimmed(3), 0, 1_000_000, 50)).toBe(10);
+    expect(pageCountAfterTrim(rows, trimmed(0), 0, 1_000_000, 0)).toBe(0);
+  });
+});
+
+describe('fitMessagesPage', () => {
+  const fake = (fitsUpTo: number, calls: Array<[number, number | undefined]>): MessagesPageRenderer => (count, preview) => {
+    calls.push([count, preview]);
+    const over = preview === undefined ? count > fitsUpTo : preview > 100;
+    return {
+      response: { content: [{ type: 'text', text: `${count}:${preview}` }] },
+      trimmed: over ? [{ label: 'messages', kept: 0, originalLength: count }] : [],
+    };
+  };
+
+  it('returns the largest untrimmed count even when the estimate overshoots', () => {
+    const calls: Array<[number, number | undefined]> = [];
+    const page = fitMessagesPage(fake(7, calls), 20, () => 15, 1000);
+    expect(page.response.content[0].text).toBe('7:undefined');
+    expect(page.trimmed).toEqual([]);
+  });
+
+  it('returns the largest untrimmed count when the estimate undershoots', () => {
+    const calls: Array<[number, number | undefined]> = [];
+    const page = fitMessagesPage(fake(12, calls), 20, () => 3, 1000);
+    expect(page.response.content[0].text).toBe('12:undefined');
+  });
+
+  it('falls back to one message with a cut payload when even one is trimmed', () => {
+    const calls: Array<[number, number | undefined]> = [];
+    const page = fitMessagesPage(fake(0, calls), 5, () => 1, 1000);
+    expect(page.trimmed).toEqual([]);
+    expect(page.response.content[0].text).toMatch(/^1:\d+$/);
+  });
+
+  it('ignores trims of arrays other than messages (active_scripts) for the cursor', () => {
+    const render: MessagesPageRenderer = (count) => ({
+      response: { content: [{ type: 'text', text: String(count) }] },
+      trimmed: [{ label: 'active_scripts', kept: 30, originalLength: 40 }],
+    });
+    expect(fitMessagesPage(render, 20, () => 5, 1000).response.content[0].text).toBe('20');
+  });
+
+  it('cutMessagePayload keeps a JSON prefix and the original size', () => {
+    const row = { script_id: 's', index: 0, seq: 1, timestamp: 0, type: 'send', payload: { a: 'x'.repeat(50) } };
+    const cut = cutMessagePayload(row, 10);
+    expect(cut.payload).toBe(JSON.stringify(row.payload).slice(0, 10));
+    expect(cut.payload_chars).toBe(JSON.stringify(row.payload).length);
+    expect(cut.payload_truncated).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ import { log } from './helpers/logger.js';
 import type {
   FridaMcpConfig,
   SessionEntry,
+  SessionRealm,
   HookEntry,
   TraceEntry,
   CoverageEntry,
@@ -15,6 +16,7 @@ import type {
   CrashSummary,
 } from './types.js';
 import type { ExposurePolicy } from './tools/tool-gate.js';
+import { scriptUsesJavaBridge } from './agent/script-traits.js';
 
 const MAX_RECENT_DETACHES = 20;
 const CLEANUP_INTERVAL_MS = 60_000;
@@ -212,9 +214,15 @@ class ServerState {
     }
   }
 
-  findSessionByTarget(target: string): SessionEntry | undefined {
+  /**
+   * Find a session by target name or pid. When `realm` is given, only a session attached in
+   * that realm matches (a native and an emulated session to the same pid are distinct);
+   * without it any realm matches, as before.
+   */
+  findSessionByTarget(target: string, realm?: SessionRealm): SessionEntry | undefined {
     for (const session of this.sessions.values()) {
-      if (session.target === target || session.pid.toString() === target) {
+      const targetMatches = session.target === target || session.pid.toString() === target;
+      if (targetMatches && sessionIsInRealm(session, realm)) {
         return session;
       }
     }
@@ -377,6 +385,11 @@ interface MessageWaiter {
 }
 
 /** Monotonic per-script message index that survives buffer trimming. */
+/** True when no realm is required or the session was attached in it (absent realm = native). */
+export function sessionIsInRealm(session: SessionEntry, realm: SessionRealm | undefined): boolean {
+  return realm === undefined || (session.realm ?? 'native') === realm;
+}
+
 function nextMessageIndex(script: ScriptEntry): number {
   const index = script.nextMessageIndex ?? script.messages.length;
   script.nextMessageIndex = index + 1;
@@ -384,14 +397,65 @@ function nextMessageIndex(script: ScriptEntry): number {
 }
 
 async function unloadScripts(entry: SessionEntry): Promise<void> {
-  for (const scriptEntry of entry.scripts.values()) {
+  await unloadScriptsNewestFirst(entry);
+}
+
+/**
+ * The session's scripts in reverse load order (newest first). Scripts are added to the
+ * `scripts` Map once, when they are created/loaded, and never re-inserted, so the Map's
+ * insertion order is the load order.
+ */
+export function scriptsNewestFirst(entry: Pick<SessionEntry, 'scripts'>): ScriptEntry[] {
+  return Array.from(entry.scripts.values()).reverse();
+}
+
+/** Unloads one script during a bulk teardown; errors are swallowed by the caller. */
+export type ScriptUnloader = (scriptEntry: ScriptEntry) => Promise<void>;
+
+const unloadScriptDirectly: ScriptUnloader = async (scriptEntry) => {
+  await scriptEntry.script.unload();
+};
+
+/**
+ * Unload every live script of a session newest-first (LIFO) and return the ids attempted.
+ *
+ * LIFO is required, not cosmetic: each script bundles its own frida-java-bridge, and every
+ * instance that hooks a Java method patches the prologue of the same ART entry routines. Only
+ * reverting those patches newest-first is safe; oldest-first leaves a newer instance restoring
+ * bytes that jump into the freed code of an older one (SIGBUS seconds later).
+ *
+ * Eternalized scripts are deliberately pinned in the target and must outlive the session (that
+ * is the point of eternalize_script), so they are never unloaded here.
+ */
+export async function unloadScriptsNewestFirst(
+  entry: Pick<SessionEntry, 'scripts'>,
+  unloadOne: ScriptUnloader = unloadScriptDirectly,
+): Promise<string[]> {
+  const attempted: string[] = [];
+  for (const scriptEntry of scriptsNewestFirst(entry)) {
+    if (scriptEntry.eternalized || scriptEntry.script.isDestroyed) continue;
+    attempted.push(scriptEntry.id);
     try {
-      // Eternalized scripts are deliberately pinned in the target and must outlive the session
-      // (that is the point of eternalize_script), so never unload them here either.
-      if (scriptEntry.eternalized || scriptEntry.script.isDestroyed) continue;
-      await scriptEntry.script.unload();
+      await unloadOne(scriptEntry);
     } catch { /* script may already be unloaded or the process may be gone */ }
   }
+  return attempted;
+}
+
+/**
+ * Scripts that must be unloaded before `scriptId` to keep Java-bridge teardown LIFO: the live,
+ * non-eternalized scripts loaded after it that also use the Java bridge, newest first. Empty
+ * when the script itself has no Java bridge (it patched nothing that could be reverted out of
+ * order). Eternalized newer scripts are skipped: they are never unloaded, so they never revert.
+ */
+export function newerJavaBridgeScripts(entry: Pick<SessionEntry, 'scripts'>, scriptId: string): ScriptEntry[] {
+  const loadOrder = Array.from(entry.scripts.values());
+  const index = loadOrder.findIndex((scriptEntry) => scriptEntry.id === scriptId);
+  if (index < 0 || !scriptUsesJavaBridge(loadOrder[index].script)) return [];
+  return loadOrder
+    .slice(index + 1)
+    .filter((newer) => !newer.eternalized && !newer.script.isDestroyed && scriptUsesJavaBridge(newer.script))
+    .reverse();
 }
 
 export function toCrashSummary(crash: frida.Crash | null | undefined): CrashSummary | null {

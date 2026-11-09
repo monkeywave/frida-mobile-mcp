@@ -36,6 +36,7 @@ import {
   type Json,
   type McpHarness,
 } from '../helpers/mock-fixtures.js';
+import { EARLY_RESUME_SESSION_NOTE } from '../../src/helpers/session-helper.js';
 
 describe('hook_method MCP tool handler', () => {
   let client: McpHarness['client'];
@@ -75,7 +76,8 @@ describe('hook_method MCP tool handler', () => {
     expect(parsed.result.method).toBe('com.example.Foo.bar');
     expect(parsed.result.pid).toBe(SPAWNED_PID);
     expect(parsed.result.interceptor_options).toBeNull();
-    expect(parsed.limitations).toEqual([]);
+    // The target was not running: the session note is the only limitation.
+    expect(parsed.limitations).toEqual([EARLY_RESUME_SESSION_NOTE]);
     expect(script.load).toHaveBeenCalledTimes(1);
     // The hook is tracked in state under the returned id.
     const state = getState();
@@ -92,7 +94,8 @@ describe('hook_method MCP tool handler', () => {
 
     expect(parsed.result.hook_type).toBe('native');
     expect(parsed.result.interceptor_options).toEqual({ scenario: 'offline', scratchRegister: 'x16' });
-    expect(parsed.limitations).toEqual([]);
+    // The target was not running: the session note is the only limitation.
+    expect(parsed.limitations).toEqual([EARLY_RESUME_SESSION_NOTE]);
   });
 
   it('drops interceptor_options for a Java hook but reports the limitation', async () => {
@@ -104,7 +107,7 @@ describe('hook_method MCP tool handler', () => {
 
     expect(parsed.result.hook_type).toBe('java');
     expect(parsed.result.interceptor_options).toBeNull();
-    expect(parsed.limitations[0]).toMatch(/ignored for this java hook/);
+    expect(parsed.limitations).toContainEqual(expect.stringMatching(/ignored for this java hook/));
   });
 
   it('attaches to an existing session by session_id without spawning a new process', async () => {

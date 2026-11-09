@@ -2,23 +2,32 @@ import { z } from 'zod';
 import { toolOutputSchema } from '../../helpers/output-schema.js';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { DeviceManager } from '../../device/manager.js';
-import { getState } from '../../state.js';
+import { getState, unloadScriptsNewestFirst } from '../../state.js';
+import { takeFinalFritapStats, unloadScriptForTeardown } from '../../fritap/tool.js';
 import { buildResult, formatToolResponse } from '../../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../../helpers/errors.js';
 import { validateProcessTarget } from '../../helpers/sanitize.js';
 import { log } from '../../helpers/logger.js';
 import { rateLimiter } from '../../helpers/rate-limiter.js';
 import { responseFormatSchema } from '../../constants.js';
+import { attachInRealm, spawnAndAttach, DEFAULT_SESSION_REALM } from '../../helpers/session-helper.js';
+
+/** Frida >= 17.26 attach realm, shared by spawn_process and attach_process. */
+export const realmSchema = z
+  .enum(['native', 'emulated'])
+  .optional()
+  .describe("Attach realm (default 'native'). Use 'emulated' to hook ARM libraries inside an x86/x86_64 Android emulator app running under native-bridge translation (Houdini/libndk); requires Frida >= 17.26 on device.");
 
 export function registerAdvancedSessionTools(server: McpServer, deviceManager: DeviceManager): void {
   server.registerTool(
     'spawn_process',
     {
       title: 'Spawn Process',
-      description: 'Spawn a new process in suspended state for early instrumentation. The process will be paused until resume_process is called.',
+      description: 'Spawn a new process in suspended state for early instrumentation. The process will be paused until resume_process is called. Set realm="emulated" to hook ARM libraries of an app running under native-bridge translation (Houdini/libndk) on an x86/x86_64 Android emulator (requires Frida >= 17.26 on device).',
       inputSchema: z.object({
         program: z.string().describe('App bundle ID or program path'),
         device: z.string().optional().describe('Device ID'),
+        realm: realmSchema,
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
@@ -29,7 +38,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         openWorldHint: true,
       },
     },
-    async ({ program, device: deviceId, response_format }) => {
+    async ({ program, device: deviceId, realm = DEFAULT_SESSION_REALM, response_format }) => {
       try {
         validateProcessTarget(program);
         const state = getState();
@@ -41,8 +50,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
           : state.selectedDevice || await deviceManager.resolve();
         state.selectedDevice = device;
 
-        const pid = await device.spawn(program);
-        const session = await device.attach(pid);
+        const { pid, session } = await spawnAndAttach(device, program, { realm });
         const platform = await deviceManager.detectPlatform(device);
         const sessionId = state.generateId();
 
@@ -53,6 +61,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
           deviceId: device.id,
           target: program,
           platform,
+          realm,
           scripts: new Map(),
           createdAt: Date.now(),
         });
@@ -62,6 +71,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         return formatToolResponse(buildResult({
           session_id: sessionId,
           pid,
+          realm,
           status: 'suspended',
           message: `Process spawned (PID: ${pid}). Use resume_process to start execution.`,
         }, [
@@ -78,10 +88,11 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
     'attach_process',
     {
       title: 'Attach to Process',
-      description: 'Attach to an already running process by PID or name.',
+      description: 'Attach to an already running process by PID or name. Set realm="emulated" to hook ARM libraries of an app running under native-bridge translation (Houdini/libndk) on an x86/x86_64 Android emulator (requires Frida >= 17.26 on device).',
       inputSchema: z.object({
         target: z.union([z.string(), z.number()]).describe('PID (number) or process name (string)'),
         device: z.string().optional().describe('Device ID'),
+        realm: realmSchema,
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
@@ -92,7 +103,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         openWorldHint: true,
       },
     },
-    async ({ target, device: deviceId, response_format }) => {
+    async ({ target, device: deviceId, realm = DEFAULT_SESSION_REALM, response_format }) => {
       try {
         const state = getState();
 
@@ -118,7 +129,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
           pid = proc.pid;
         }
 
-        const session = await device.attach(pid);
+        const session = await attachInRealm(device, pid, realm);
         const platform = await deviceManager.detectPlatform(device);
         const sessionId = state.generateId();
 
@@ -129,6 +140,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
           deviceId: device.id,
           target: String(target),
           platform,
+          realm,
           scripts: new Map(),
           createdAt: Date.now(),
         });
@@ -138,6 +150,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         return formatToolResponse(buildResult({
           session_id: sessionId,
           pid,
+          realm,
           message: `Attached to process (PID: ${pid}).`,
         }, [
           { tool: 'hook_method', args: { target: String(target) }, reason: 'Hook methods' },
@@ -239,12 +252,14 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
         const state = getState();
         const session = state.getSession(session_id);
         if (!session) throw new FridaMcpError('SESSION_NOT_FOUND', `Session "${session_id}" not found.`, []);
-        // Eternalized scripts are intentionally pinned in the target and outlive the session, so
-        // don't try to unload them (that is the whole point of eternalize_script).
-        for (const s of session.scripts.values()) { if (s.eternalized) continue; try { await s.script.unload(); } catch {} }
+        // Newest-first (Java-bridge teardown must be LIFO); eternalized scripts are skipped
+        // because they are intentionally pinned in the target and outlive the session.
+        await unloadScriptsNewestFirst(session, unloadScriptForTeardown);
         await session.session.detach();
         state.removeSession(session_id);
-        return formatToolResponse(buildResult({ session_id, status: 'detached' }, [{ tool: 'get_status', reason: 'Check state' }]), response_format);
+        const fritapCaptures = takeFinalFritapStats(session_id);
+        const result = { session_id, status: 'detached', ...(fritapCaptures.length > 0 ? { fritap_captures: fritapCaptures } : {}) };
+        return formatToolResponse(buildResult(result, [{ tool: 'get_status', reason: 'Check state' }]), response_format);
       } catch (err) {
         return formatToolResponse(wrapFridaError(err).toErrorResponse(), response_format);
       }
@@ -391,7 +406,7 @@ export function registerAdvancedSessionTools(server: McpServer, deviceManager: D
       const state = getState();
       const sessions = Array.from(state.sessions.values()).map((s) => ({
         id: s.id, target: s.target, pid: s.pid, platform: s.platform,
-        device: s.deviceId, scripts: s.scripts.size,
+        realm: s.realm ?? DEFAULT_SESSION_REALM, device: s.deviceId, scripts: s.scripts.size,
         created: new Date(s.createdAt).toISOString(),
       }));
       return formatToolResponse(buildResult({ sessions }, []), response_format);

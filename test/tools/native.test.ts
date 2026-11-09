@@ -8,6 +8,7 @@ import {
   toBuffer,
   hex,
   DUMP_CHUNK_SIZE,
+  RESOLVE_ADDRESS_SOURCE,
 } from '../../src/tools/advanced/native.js';
 import { FridaMcpError } from '../../src/helpers/errors.js';
 
@@ -101,5 +102,13 @@ describe('hex', () => {
   it('formats bigints as 0x-prefixed lower-case hex', () => {
     expect(hex(0x7f00000000n)).toBe('0x7f00000000');
     expect(hex(0n)).toBe('0x0');
+  });
+});
+
+describe('RESOLVE_ADDRESS_SOURCE', () => {
+  it('uses the throw-safe rangeAt helper instead of a raw Process.findRangeByAddress', () => {
+    expect(RESOLVE_ADDRESS_SOURCE).toContain('function rangeAt');
+    expect(RESOLVE_ADDRESS_SOURCE).toContain('var range = rangeAt(p);');
+    expect(RESOLVE_ADDRESS_SOURCE.match(/Process\.findRangeByAddress/g)).toHaveLength(1);
   });
 });

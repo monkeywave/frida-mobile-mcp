@@ -15,19 +15,61 @@ const MAX_SCAN_MATCHES = 100;
 
 const ADDRESS_NOTATIONS = '"0x7fff12345678" (absolute), "libfoo.so+0x1234" or "libfoo.so+4660" (module-relative offset), "libssl.so!SSL_read" (module export), or "!open" / "open" (global export)';
 
-const READ_MEMORY_SOURCE = RESOLVE_TARGET_SNIPPET + `
+/**
+ * Agent-side range lookup that behaves the same on every Frida version: Frida < 17.25 on Darwin
+ * described the next region for unmapped addresses, 17.25+ fails region queries, and the find variants return
+ * null while the get/query variants throw. Returns the range or null.
+ */
+export const SAFE_RANGE_LOOKUP_SNIPPET = `
+  function rangeAt(address) {
+    try {
+      var range = Process.findRangeByAddress(address);
+      if (range === null || range === undefined) return null;
+      var end = range.base.add(range.size);
+      return (address.compare(range.base) >= 0 && address.compare(end) < 0) ? range : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function unmappedError(address) {
+    return { error: 'invalid_address', message: 'Address ' + address + ' is not mapped in the target process' };
+  }
+`;
+
+/**
+ * resolveTarget treats a null absolute pointer as "not found". For memory tools a literal address
+ * (0x0, 0x10, ...) is a valid, merely unmapped address, so absolute specs bypass that null filter.
+ */
+export const RESOLVE_MEMORY_TARGET_SNIPPET = `
+  function resolveMemoryTarget(spec) {
+    var parsed = typeof spec === 'string' ? parseTargetSpec(spec) : spec;
+    if (parsed && parsed.kind === 'absolute') {
+      try { return ptr(parsed.address); } catch (e) { return null; }
+    }
+    return resolveTarget(parsed);
+  }
+`;
+
+const READ_MEMORY_SOURCE = RESOLVE_TARGET_SNIPPET + RESOLVE_MEMORY_TARGET_SNIPPET + SAFE_RANGE_LOOKUP_SNIPPET + `
   rpc.exports.read = function() {
     var o = __FRIDA_MCP__.options;
-    var base = resolveTarget(o.target);
+    var base = resolveMemoryTarget(o.target);
     if (base === null) throw new Error('target not found: ' + o.address);
-    var buf = base.readByteArray(o.size);
+    if (rangeAt(base) === null) return unmappedError(base);
+    var buf;
+    try {
+      buf = base.readByteArray(o.size);
+    } catch (e) {
+      return unmappedError(base);
+    }
     if (buf === null) throw new Error('memory at ' + base + ' is not readable');
     var hex = Array.from(new Uint8Array(buf)).map(function(b) { return ('0' + b.toString(16)).slice(-2); }).join('');
     return { data: hex, address: base.toString(), rva: describeAddress(base).rva };
   };
 `;
 
-const WRITE_MEMORY_SOURCE = RESOLVE_TARGET_SNIPPET + `
+const WRITE_MEMORY_SOURCE = RESOLVE_TARGET_SNIPPET + RESOLVE_MEMORY_TARGET_SNIPPET + SAFE_RANGE_LOOKUP_SNIPPET + `
   function hexToBytes(hexData) {
     var bytes = [];
     for (var i = 0; i < hexData.length; i += 2) {
@@ -37,16 +79,17 @@ const WRITE_MEMORY_SOURCE = RESOLVE_TARGET_SNIPPET + `
   }
 
   function isWritable(address) {
-    var range = Process.findRangeByAddress(address);
+    var range = rangeAt(address);
     return range !== null && range.protection.indexOf('w') !== -1;
   }
 
   rpc.exports.write = function() {
     var o = __FRIDA_MCP__.options;
-    var address = resolveTarget(o.target);
+    var address = resolveMemoryTarget(o.target);
     if (address === null) throw new Error('target not found: ' + o.address);
     var bytes = hexToBytes(o.hexData);
-    var range = Process.findRangeByAddress(address);
+    var range = rangeAt(address);
+    if (range === null) return unmappedError(address);
     var originalProtection = range ? range.protection : null;
     var reprotected = false;
 
@@ -105,11 +148,25 @@ const SCAN_MEMORY_SOURCE = `
   };
 `;
 
-type ReadResult = { data: string; address: string; rva: string | null };
+type ReadSuccess = { data: string; address: string; rva: string | null };
+type ReadResult = ReadSuccess | { error: 'invalid_address'; message: string };
 
 type WriteResult =
   | { ok: true; address: string; reprotected: boolean; original_protection: string | null }
   | { error: string; message: string };
+
+/** Map the agent's `invalid_address` result to the structured INVALID_ADDRESS error. */
+export function throwIfUnmapped(result: { error?: string; message?: string } | object, sessionId: string): void {
+  const failure = result as { error?: string; message?: string };
+  if (failure.error !== 'invalid_address') return;
+  throw new FridaMcpError(
+    'INVALID_ADDRESS',
+    failure.message ?? 'Address is not mapped in the target process',
+    [{ tool: 'enumerate_modules', args: { session_id: sessionId }, reason: 'List loaded modules and their address ranges' }],
+    {},
+    { category: 'request', retryable: false }
+  );
+}
 
 /**
  * Validate a memory target spec and the transfer size. Only absolute addresses can be
@@ -178,20 +235,21 @@ export function registerMemoryTools(server: McpServer): void {
         } finally {
           await script.unload();
         }
-        const hexData = readResult.data;
+        throwIfUnmapped(readResult, session_id);
+        const { data: hexData, address: resolvedAddress, rva } = readResult as ReadSuccess;
 
         return formatToolResponse(
           buildResult(
             {
-              address: readResult.address,
-              rva: readResult.rva,
+              address: resolvedAddress,
+              rva,
               target: address,
               size,
               data: hexData,
               data_length: hexData.length / 2,
             },
             [
-              { tool: 'read_memory', args: { session_id, address: nextChunkAddress(readResult.address, size), size }, reason: 'Read next chunk' },
+              { tool: 'read_memory', args: { session_id, address: nextChunkAddress(resolvedAddress, size), size }, reason: 'Read next chunk' },
               { tool: 'scan_memory', reason: 'Search for patterns in memory' },
             ]
           ),
@@ -254,6 +312,7 @@ export function registerMemoryTools(server: McpServer): void {
         } finally {
           await script.unload();
         }
+        throwIfUnmapped(writeResult, session_id);
         if ('error' in writeResult) {
           throw new FridaMcpError('MEMORY_PROTECT_FAILED', writeResult.message, [
             { tool: 'read_memory', args: { session_id, address, size: bytes.length }, reason: 'Inspect the target range' },

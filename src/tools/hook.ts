@@ -7,7 +7,7 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { validateProcessTarget, sha256Hex } from '../helpers/sanitize.js';
 import { log } from '../helpers/logger.js';
-import { getOrCreateSession } from '../helpers/session-helper.js';
+import { getOrCreateSession, sessionResolutionLimitations } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript, composeAgentSource, type AgentScriptOptions } from '../agent/script-factory.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
@@ -239,12 +239,13 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
         const method = resolveHookMethod(methodInput, evidence);
         const instrumentation = resolveInstrumentationTarget(target, session_id);
 
-        const { sessionEntry: resolvedSession, fridaDevice, isNew } = await getOrCreateSession(deviceManager, {
+        const resolution = await getOrCreateSession(deviceManager, {
           target: instrumentation.target,
           sessionId: instrumentation.sessionId,
           device,
           forceSpawn: shouldSpawn,
         });
+        const { sessionEntry: resolvedSession, fridaDevice, isNew } = resolution;
         let sessionEntry = resolvedSession;
         if (isNew && shouldSpawn) {
           await fridaDevice.resume(sessionEntry.pid);
@@ -275,6 +276,8 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
           options: { ...hookOptions, platform: sessionEntry.platform },
           // Native hooks never touch Java/ObjC; skip the bridge payload for them.
           bridges: hookType === 'native' ? [] : undefined,
+          // Java hooks patch ART and must be unloaded newest-first (see script-traits).
+          hooksJavaMethods: hookType === 'java',
         };
         // Provenance: digest of the full composed source (preamble with options + bridges + body).
         const composed = composeAgentSource(agentOptions);
@@ -376,7 +379,7 @@ export function registerHookTool(server: McpServer, deviceManager: DeviceManager
               { tool: 'hook_method', reason: 'Hook additional methods' },
               { tool: 'stop_instrumentation', args: { session_id: sessionEntry.id }, reason: 'Remove all hooks when done' },
             ],
-            { limitations: interceptorOptionsLimitations(hookType, interceptor_options) }
+            { limitations: [...sessionResolutionLimitations(resolution), ...interceptorOptionsLimitations(hookType, interceptor_options)] }
           ),
           response_format
         );

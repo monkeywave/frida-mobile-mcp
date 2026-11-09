@@ -7,7 +7,7 @@ import { attachScriptSinks } from '../helpers/script-sink.js';
 import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { wrapFridaError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
-import { getOrCreateSession } from '../helpers/session-helper.js';
+import { getOrCreateSession, sessionResolutionLimitations } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript, composeAgentSource, type AgentScriptOptions } from '../agent/script-factory.js';
 import { sha256Hex } from '../helpers/sanitize.js';
@@ -51,12 +51,12 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
         const duration = duration_seconds ?? 10;
         const instrumentation = resolveInstrumentationTarget(target, session_id);
 
-        const { sessionEntry: resolvedSession } = await getOrCreateSession(deviceManager, {
+        const resolution = await getOrCreateSession(deviceManager, {
           target: instrumentation.target,
           sessionId: instrumentation.sessionId,
           device,
         });
-        let sessionEntry = resolvedSession;
+        let sessionEntry = resolution.sessionEntry;
 
         // Build trace script: the body is constant per trace type and reads the
         // pattern/flags from __FRIDA_MCP__.options at runtime (no code interpolation).
@@ -160,7 +160,7 @@ export function registerTraceTool(server: McpServer, deviceManager: DeviceManage
               { tool: 'trace_method', args: { session_id: sessionEntry.id, method, duration_seconds: duration * 2 }, reason: 'Trace longer for more results' },
               { tool: 'search_classes_and_methods', reason: 'Find related methods to trace' },
             ],
-            { limitations: interceptorOptionsLimitations(traceType, interceptor_options) }
+            { limitations: [...sessionResolutionLimitations(resolution), ...interceptorOptionsLimitations(traceType, interceptor_options)] }
           ),
           response_format
         );

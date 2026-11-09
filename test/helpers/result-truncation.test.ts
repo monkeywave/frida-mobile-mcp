@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { buildResult, formatToolResponse } from '../../src/helpers/result-builder.js';
+import { buildResult, formatToolResponse, formatToolResponseDetailed, MARKDOWN_MAX_LIST_ITEMS } from '../../src/helpers/result-builder.js';
 import { ResponseFormat } from '../../src/constants.js';
 import { initState } from '../../src/state.js';
 import { loadConfig } from '../../src/config.js';
@@ -67,5 +67,25 @@ describe('formatToolResponse truncation', () => {
     const parsed = JSON.parse(content[0].text);
     expect(parsed.result).toEqual({ ok: true, items: [1, 2, 3] });
     expect(parsed.limitations).toEqual([]);
+  });
+});
+
+describe('Markdown list cap', () => {
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
+
+  it('reports an object array longer than the Markdown cap as trimmed, even when the text fits', () => {
+    const { response, trimmed } = formatToolResponseDetailed(buildResult({ items: rows(40) }), ResponseFormat.MARKDOWN);
+    expect(trimmed).toEqual([{ label: 'items', kept: MARKDOWN_MAX_LIST_ITEMS, originalLength: 40 }]);
+    const text = response.content[0].text;
+    expect(text).toContain('Markdown list cap');
+    expect(text).not.toMatch(/and \d+ more/);
+    expect((response.structuredContent!.result as any).items).toHaveLength(40);
+  });
+
+  it('does not report a trim at or below the cap, for scalar lists, or for JSON/TOON', () => {
+    expect(formatToolResponseDetailed(buildResult({ items: rows(MARKDOWN_MAX_LIST_ITEMS) }), ResponseFormat.MARKDOWN).trimmed).toEqual([]);
+    expect(formatToolResponseDetailed(buildResult({ names: Array.from({ length: 40 }, (_, i) => `n${i}`) }), ResponseFormat.MARKDOWN).trimmed).toEqual([]);
+    expect(formatToolResponseDetailed(buildResult({ items: rows(40) }), ResponseFormat.JSON).trimmed).toEqual([]);
+    expect(formatToolResponseDetailed(buildResult({ items: rows(40) }), ResponseFormat.TOON).trimmed).toEqual([]);
   });
 });

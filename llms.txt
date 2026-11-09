@@ -4,11 +4,11 @@
 
 ## Start here
 
-- [README](README.md): quick start, requirements (frida-server 17.x), tool tables, configuration, security guardrails, troubleshooting.
+- [README](README.md): quick start, requirements (frida-server 17.x), tool tables, configuration, security guardrails, troubleshooting. Details load on demand: [tools reference](skills/mobile-dynamic-analysis/references/tools.md), [friTap](skills/mobile-dynamic-analysis/references/fritap.md).
 - [Client setup](docs/clients.md): Claude Desktop/Code, Cursor, VS Code, Windsurf, Codex, `setup`/`doctor` commands, HTTP mode, remote frida-server, version matching, environment variables.
 - [Interoperability](docs/interop.md): address notation contract, evidence/error envelope and error codes, `capture_tls` details, static -> dynamic -> static walkthrough with ReVa/IDA/REA.
 - [Working with REA](docs/rea.md): routing rules between REA and this server, installing both, context budget (`FRIDA_MCP_TOOL_PROFILE=core`), evidence field and error-code mapping, APK -> static -> hook -> report walkthrough.
-- [Agent skill](skills/mobile-dynamic-analysis/SKILL.md): when to use runtime analysis, recommended tool order, guardrail flags, troubleshooting.
+- [Agent skill](skills/mobile-dynamic-analysis/SKILL.md): when to use runtime analysis, recommended tool order, guardrail flags, troubleshooting. Details on demand: [tools reference](skills/mobile-dynamic-analysis/references/tools.md), [friTap](skills/mobile-dynamic-analysis/references/fritap.md).
 
 ## For contributors
 

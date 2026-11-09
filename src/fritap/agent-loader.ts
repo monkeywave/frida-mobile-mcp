@@ -15,7 +15,8 @@
  * Integrity: when a sha256 pin exists for the tag (built-in PINNED_AGENT_SHA256 or
  * FRITAP_AGENT_SHA256), both the cached bundle (3) and a download (4) are verified against it;
  * a mismatching cache entry is ignored and re-downloaded. FRITAP_AGENT_PATH (1) and the pip
- * package (2) are local, user-chosen sources and are trusted as-is (not verified).
+ * package (2) are local, user-chosen sources and are trusted as-is (not verified). A pip
+ * package older than friTap 2.0.0 (Frida 15/16-era agent) is skipped (see compat.ts).
  *
  * Handshake (what friTap's Python side does, see ssl_logger_core / legacy/message_handler):
  * the agent drives the configuration itself during script.load(). It calls
@@ -24,7 +25,8 @@
  * (`experimental`, `defaultFD`, `socket_tracing`, `pattern_hooking`, `offset_hooking`, ...)
  * and expect a reply with the same type name. Hooks are installed automatically at the
  * end of the bundle; nothing has to be called via rpc after load. `rpc.exports` offers
- * `agentAbiVersion()` (currently 2) and `gracefulDetach()`.
+ * `agentAbiVersion()` (2 for friTap 2.5.x, 3 since 2.6.3) and `gracefulDetach()`.
+ * The handshake is unchanged between v2.5.2 and v2.6.5.
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -32,14 +34,18 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import type frida from 'frida';
 import { FRIDA_COMPILE_BUNDLE_MARKER } from '../agent/script-factory.js';
+import { patchJavaBridgeInCompiledBundle, type JavaBridgePatchStatus } from '../agent/java-bridge-patch.js';
 import { sha256Hex } from '../helpers/sanitize.js';
-import { FritapAgentUnavailableError } from '../helpers/errors.js';
+import { FridaMcpError, FritapAgentUnavailableError } from '../helpers/errors.js';
 import { log } from '../helpers/logger.js';
 import { PINNED_AGENT_SHA256 } from './constants.js';
+import { decidePipFritapUsage } from './compat.js';
+import { toProtocolSelect } from './protocols.js';
 
-export const DEFAULT_FRITAP_VERSION = 'v2.5.2';
+export const DEFAULT_FRITAP_VERSION = 'v2.6.5';
 export const FRITAP_AGENT_FILENAME = 'fritap_agent.js';
-export const FRITAP_AGENT_ABI_VERSION = 2;
+/** ABI of the default (pinned) agent; every ABI in SUPPORTED_FRITAP_AGENT_ABI_VERSIONS is accepted. */
+export const FRITAP_AGENT_ABI_VERSION = 3;
 const PYTHON_PROBE_TIMEOUT_MS = 5_000;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 const PYTHON_CANDIDATES = ['python3', 'python'];
@@ -52,6 +58,15 @@ export interface LocatedFritapAgent {
   /** Version string: friTap.__version__ for the Python package, the git tag for downloads, 'unknown' for env paths. */
   version: string;
   origin: FritapAgentOrigin;
+  /**
+   * Outcome of the in-memory multi-script unload workaround (see java-bridge-patch.ts). `source`
+   * is the patched bundle; the file at `path` is never modified. Absent on raw (unpatched) results.
+   */
+  javaBridgePatch?: JavaBridgePatchStatus;
+  /** friTap's agent always embeds frida-java-bridge; pass to createAgentScript as `usesJavaBridge`. Set once patched. */
+  usesJavaBridge?: boolean;
+  /** Non-fatal problems to surface to the caller (e.g. the workaround could not be applied). */
+  warnings?: string[];
 }
 
 export interface LocateOptions {
@@ -83,8 +98,48 @@ export function isValidFritapBundle(source: string): boolean {
   return source.startsWith(FRIDA_COMPILE_BUNDLE_MARKER);
 }
 
-/** Find the friTap agent bundle, trying env, Python package, cache and (optionally) download. */
+/**
+ * Find the friTap agent bundle (env, Python package, cache, optional download; sha256-verified
+ * where pinned) and apply the Java bridge multi-script unload workaround to its source in memory.
+ */
 export async function locateFritapAgent(options: LocateOptions = {}): Promise<LocatedFritapAgent> {
+  return withJavaBridgePatch(await findFritapAgent(options));
+}
+
+export const FRITAP_JAVA_BRIDGE_PATCH_WARNING =
+  'friTap agent: the Java bridge multi-script unload workaround could not be applied (VM.dispose call not found); ' +
+  'stopping friTap while other Java scripts are loaded may abort the app with a JNI error.';
+
+/**
+ * Patch the embedded frida-java-bridge so unloading friTap does not detach the JS thread that
+ * other scripts' bridges still use. Only the in-memory source changes. Exported as a test hook.
+ */
+export function withJavaBridgePatch(agent: LocatedFritapAgent): LocatedFritapAgent {
+  const patch = patchOnce(agent);
+  const warnings = [...(agent.warnings ?? [])];
+  if (patch.status === 'pattern-not-found') warnings.push(FRITAP_JAVA_BRIDGE_PATCH_WARNING);
+  return { ...agent, source: patch.source, javaBridgePatch: patch.status, usesJavaBridge: true, warnings };
+}
+
+interface MemoisedPatch { source: string; status: JavaBridgePatchStatus }
+
+const MAX_MEMOISED_PATCHES = 4;
+const memoisedPatches = new Map<string, MemoisedPatch>();
+
+/** Patch (and warn about) a given bundle once; repeated captures reuse the result. */
+function patchOnce(agent: LocatedFritapAgent): MemoisedPatch {
+  const key = `${agent.path}\0${sha256Hex(agent.source)}`;
+  const known = memoisedPatches.get(key);
+  if (known) return known;
+  const result = patchJavaBridgeInCompiledBundle(agent.source);
+  if (!result.patched) log('warn', `${FRITAP_JAVA_BRIDGE_PATCH_WARNING} (${agent.path})`);
+  if (memoisedPatches.size >= MAX_MEMOISED_PATCHES) memoisedPatches.delete(memoisedPatches.keys().next().value as string);
+  const patch = { source: result.source, status: result.status };
+  memoisedPatches.set(key, patch);
+  return patch;
+}
+
+async function findFritapAgent(options: LocateOptions): Promise<LocatedFritapAgent> {
   const env = options.env ?? process.env;
   const version = toFritapTag(options.version ?? env.FRITAP_VERSION ?? DEFAULT_FRITAP_VERSION);
   const searched: string[] = [];
@@ -131,8 +186,14 @@ async function loadFromPythonPackage(searched: string[]): Promise<LocatedFritapA
     return null;
   }
   const bundlePath = path.join(packageDir, FRITAP_AGENT_FILENAME);
-  const version = (await readFritapPythonVersion()) ?? 'unknown';
-  return readBundle(bundlePath, version, 'python', searched);
+  const detectedVersion = await readFritapPythonVersion();
+  const decision = decidePipFritapUsage(detectedVersion);
+  if (decision.warning) log('warn', decision.warning);
+  if (!decision.use) {
+    searched.push(`${bundlePath} (skipped: friTap ${detectedVersion} is too old)`);
+    return null;
+  }
+  return readBundle(bundlePath, detectedVersion ?? 'unknown', 'python', searched);
 }
 
 function readBundle(file: string, version: string, origin: FritapAgentOrigin, searched: string[]): LocatedFritapAgent | null {
@@ -278,6 +339,20 @@ export interface FritapAgentOptions {
   offsets?: unknown;
   /** Verbose agent debugging output. */
   debugOutput?: boolean;
+  /** Protocols to hook (friTap --protocol); joined into `protocol_select`. Default ['tls']. */
+  protocols?: readonly string[];
+  /** Minimal symbol-only keylog for PairIP-protected apps (friTap --pairip-safe). */
+  pairipSafe?: boolean;
+  /** Skip the Android dynamic-loader hook (friTap --no-loader-hook). */
+  noLoaderHook?: boolean;
+  /** Dry run: report the platform branch (platform_report) without installing hooks (friTap --probe). */
+  probe?: boolean;
+  /** Emit one caller_stack backtrace per connection for SDK attribution (friTap --attribute-sdk). */
+  attributeSdk?: boolean;
+  /** Use a placeholder socket when the record fd is unresolvable (friTap --enable_default_fd). */
+  defaultFd?: boolean;
+  /** In-agent scan for modules with an SSL keylog callback (friTap --library-scan). */
+  libraryScan?: boolean;
 }
 
 /** Fields friTap's Python side sends in the `config_batch` reply (ssl_logger_core.py). */
@@ -286,28 +361,54 @@ export function buildFritapConfigBatch(options: FritapAgentOptions): Record<stri
     offsets: options.offsets === undefined ? null : asJsonString(options.offsets),
     patterns: options.patterns === undefined ? null : asJsonString(options.patterns),
     socket_tracing: false,
-    defaultFD: false,
+    defaultFD: options.defaultFd ?? false,
     experimental: options.experimental ?? false,
-    protocol_select: 'tls',
+    protocol_select: toProtocolSelect(options.protocols),
     install_lsass_hook: true,
     use_modern: false,
     library_scan: null,
-    library_scan_enabled: false,
+    library_scan_enabled: options.libraryScan ?? false,
     ohttp_enabled: true,
     quic_capture_mode: 'stream',
     quic_only: false,
-    no_loader_hook: false,
+    no_loader_hook: options.noLoaderHook ?? false,
     spawned: options.spawned ?? false,
+    lean_wine: false,
     stealth_loader: false,
-    pairip_safe: false,
-    probe: false,
+    pairip_safe: options.pairipSafe ?? false,
+    probe: options.probe ?? false,
     force_anchor_locator: false,
+    attribute_sdk: options.attributeSdk ?? false,
     quic_egress_headers_layer: 'auto',
     debug_output: options.debugOutput ?? false,
     pcap_enabled: options.fullCapture ?? false,
     keylog_enabled: options.keylog ?? true,
     extensions: {},
   };
+}
+
+/**
+ * Validate a capture_tls `patterns`/`offsets` value before anything is spawned or attached: the
+ * friTap agent JSON.parse()s it and reads it as an object (pattern.json / offsets JSON), so it
+ * must be a JSON object, given as an object or as a JSON string. Throws INVALID_ARGUMENT.
+ */
+export function validateFritapHookJson(field: 'patterns' | 'offsets', value: unknown): void {
+  if (value === undefined) return;
+  const parsed = typeof value === 'string' ? parseJsonOrUndefined(value) : value;
+  if (isPlainJsonObject(parsed)) return;
+  const problem = typeof value === 'string' && parsed === undefined ? 'is not valid JSON' : 'is not a JSON object';
+  throw new FridaMcpError(
+    'INVALID_ARGUMENT',
+    `${field} ${problem}: pass friTap's ${field === 'patterns' ? 'pattern.json' : 'offsets JSON'} contents as an object or a JSON string of an object.`
+  );
+}
+
+function parseJsonOrUndefined(text: string): unknown {
+  try { return JSON.parse(text); } catch { return undefined; }
+}
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asJsonString(value: unknown): string {
@@ -320,12 +421,12 @@ function asJsonString(value: unknown): string {
  */
 const LEGACY_CHANNEL_REPLIES: Record<string, (o: FritapAgentOptions) => unknown> = {
   experimental: (o) => o.experimental ?? false,
-  defaultFD: () => false,
+  defaultFD: (o) => o.defaultFd ?? false,
   socket_tracing: () => false,
   pattern_hooking: (o) => (o.patterns === undefined ? null : asJsonString(o.patterns)),
   offset_hooking: (o) => (o.offsets === undefined ? null : asJsonString(o.offsets)),
   install_lsass_hook: () => true,
-  protocol_select: () => 'tls',
+  protocol_select: (o) => toProtocolSelect(o.protocols),
   library_scan: () => null,
   use_modern: () => false,
 };

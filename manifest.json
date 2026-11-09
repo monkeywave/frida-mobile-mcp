@@ -477,6 +477,28 @@
         }
       ],
       "text": "Hunt for secrets in ${package_name} and recover them as reusable patterns."
+    },
+    {
+      "name": "tls_traffic_audit",
+      "description": "friTap-backed TLS traffic audit: capture keys and decrypted plaintext with capture_tls, attribute traffic to SDKs, review per-library stats, optionally hand off to fritap mcp.",
+      "arguments": [
+        {
+          "name": "target",
+          "description": "App bundle ID, process name or PID",
+          "required": true
+        },
+        {
+          "name": "device",
+          "description": "Device ID (defaults to the selected device)",
+          "required": false
+        },
+        {
+          "name": "protocols",
+          "description": "Comma-separated friTap protocols: tls, rc4, auto, all (default tls)",
+          "required": false
+        }
+      ],
+      "text": "Audit the TLS traffic of ${target} with capture_tls and report findings."
     }
   ]
 }

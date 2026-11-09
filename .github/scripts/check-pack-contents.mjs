@@ -12,6 +12,8 @@ const REQUIRED_FILES = [
   'dist/lib.js',
   'dist/lib.d.ts',
   'skills/mobile-dynamic-analysis/SKILL.md',
+  'skills/mobile-dynamic-analysis/references/tools.md',
+  'skills/mobile-dynamic-analysis/references/fritap.md',
   'README.md',
 ];
 

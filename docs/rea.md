@@ -97,7 +97,7 @@ npx skills add morluto/rea --skill reverse-engineer-anything
 npx skills add monkeywave/frida-mobile-mcp --skill mobile-dynamic-analysis
 ```
 
-The frida-mobile-mcp skill is listed at <https://skills.sh/monkeywave/frida-mobile-mcp/mobile-dynamic-analysis>. Without the skills CLI, copy it from `node_modules/frida-mobile-mcp/skills/` after `npm install frida-mobile-mcp`, or read it at runtime as the MCP resource `frida://skills/mobile-dynamic-analysis`.
+The frida-mobile-mcp skill is listed at <https://skills.sh/monkeywave/frida-mobile-mcp/mobile-dynamic-analysis>. Without the skills CLI, copy it from `node_modules/frida-mobile-mcp/skills/` after `npm install frida-mobile-mcp`, or read it at runtime as the MCP resource `frida://skills/mobile-dynamic-analysis` (reference files: `frida://skills/mobile-dynamic-analysis/references/tools.md` and `.../fritap.md`).
 
 ## 6. Evidence across both servers
 
@@ -182,7 +182,7 @@ Use these only against apps you are authorised to test. The full guardrail list 
 
 ## 9. Troubleshooting when both run
 
-- **Two frida-node minor versions.** REA pins frida 17.23.2, this server depends on frida `^17.24.3`. Both speak to the same frida-server 17.x; matching the minor version to frida-node is recommended, not required. `frida-mobile-mcp doctor` shows the versions this server sees.
+- **Two frida-node minor versions.** REA pins frida 17.23.2, this server depends on frida `^17.26.2`. Both speak to the same frida-server 17.x; matching the minor version to frida-node is recommended, not required. `frida-mobile-mcp doctor` shows the versions this server sees.
 - **Device errors look different.** A missing or disallowed device is `DEVICE_NOT_FOUND` (category `capability`) here and usually `capability_unavailable` in REA. Both mean a configuration or installation problem, not something to retry.
 - **Port 27042 is shared.** Both servers reach the same frida-server on the device (USB, or `27042` for remote). Do not start a second frida-server; if you moved it with `frida_server_start` to another port, point both servers at that address.
 - **No Java bridge in REA sessions.** `start_frida_session` on a mobile app gives a session without `Java` or `ObjC`, so `Java.perform` fails. For Android or iOS apps use `hook_method`, `describe_class` or `execute_script` here, which inject the bundled bridges.

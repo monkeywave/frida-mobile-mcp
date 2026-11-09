@@ -206,13 +206,13 @@
         },
         {
           "name": "FRITAP_VERSION",
-          "description": "friTap release tag to download when no local agent is found (default v2.5.2)",
+          "description": "friTap release tag to download when no local agent is found (default v2.6.5)",
           "isRequired": false,
           "isSecret": false
         },
         {
           "name": "FRITAP_AGENT_SHA256",
-          "description": "Bare sha256 of the downloaded friTap agent for the selected FRITAP_VERSION tag. v2.5.2 is pinned in the package; set this for other tags.",
+          "description": "Bare sha256 of the downloaded friTap agent for the selected FRITAP_VERSION tag. v2.6.5 is pinned in the package; set this for other tags.",
           "isRequired": false,
           "isSecret": false
         }

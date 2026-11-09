@@ -1,5 +1,7 @@
+import vm from 'node:vm';
+import { parseTarget, RESOLVE_TARGET_SNIPPET } from '../../src/agent/address.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { registerMemoryTools } from '../../src/tools/memory.js';
+import { registerMemoryTools, SAFE_RANGE_LOOKUP_SNIPPET, RESOLVE_MEMORY_TARGET_SNIPPET } from '../../src/tools/memory.js';
 import { initState, getState } from '../../src/state.js';
 import { rateLimiter } from '../../src/helpers/rate-limiter.js';
 import type { FridaMcpConfig } from '../../src/types.js';
@@ -183,6 +185,105 @@ describe('memory MCP tools', () => {
       fresh();
       const parsed = await callJson(client, 'scan_memory', { session_id: 'nope', pattern: '90' });
       expect(parsed.error.code).toBe('SESSION_NOT_FOUND');
+    });
+  });
+
+  describe('unmapped addresses (Frida 17.25 region lookup semantics)', () => {
+    it('read_memory maps an agent invalid_address result to INVALID_ADDRESS', async () => {
+      fresh();
+      readResult = { error: 'invalid_address', message: 'Address 0x10 is not mapped in the target process' };
+      const parsed = await callJson(client, 'read_memory', { session_id: SESSION_ID, address: '0x10', size: 4 });
+      expect(parsed.error.code).toBe('INVALID_ADDRESS');
+      expect(parsed.error.category).toBe('request');
+      expect(parsed.error.retryable).toBe(false);
+      expect(scripts.find((s) => s.name === 'read_memory:read')!.unloadCalls).toBe(1);
+    });
+
+    it('write_memory maps an agent invalid_address result to INVALID_ADDRESS', async () => {
+      fresh({ memoryWriteEnabled: true });
+      writeResult = { error: 'invalid_address', message: 'Address 0x10 is not mapped in the target process' };
+      const parsed = await callJson(client, 'write_memory', { session_id: SESSION_ID, address: '0x10', data: '90' });
+      expect(parsed.error.code).toBe('INVALID_ADDRESS');
+    });
+
+    describe('agent rangeAt()', () => {
+      const makeAddr = (n: number) => ({
+        n,
+        compare: (o: { n: number }) => n - o.n,
+        add: (k: number) => makeAddr(n + k),
+        toString: () => '0x' + n.toString(16),
+      });
+      const load = (find: () => unknown) => {
+        const factory = new Function(
+          'Process',
+          `${SAFE_RANGE_LOOKUP_SNIPPET}; return { rangeAt: rangeAt, unmappedError: unmappedError };`
+        );
+        return factory({ findRangeByAddress: find }) as {
+          rangeAt: (a: unknown) => unknown;
+          unmappedError: (a: unknown) => { error: string; message: string };
+        };
+      };
+      const range = { base: makeAddr(0x1000), size: 0x1000, protection: 'rw-' };
+
+      it('returns the range when the address is inside it', () => {
+        expect(load(() => range).rangeAt(makeAddr(0x1800))).toBe(range);
+      });
+
+      it('returns null when find returns null (new Frida)', () => {
+        expect(load(() => null).rangeAt(makeAddr(0x10))).toBeNull();
+      });
+
+      it('returns null when the lookup throws', () => {
+        const agent = load(() => {
+          throw new Error('unable to find range');
+        });
+        expect(agent.rangeAt(makeAddr(0x10))).toBeNull();
+      });
+
+      it('rejects a "next region" answer that does not contain the address (old Darwin Frida)', () => {
+        expect(load(() => range).rangeAt(makeAddr(0x10))).toBeNull();
+      });
+
+      it('builds the invalid_address envelope', () => {
+        const agent = load(() => null);
+        expect(agent.unmappedError(makeAddr(0x10))).toEqual({
+          error: 'invalid_address',
+          message: 'Address 0x10 is not mapped in the target process',
+        });
+      });
+    });
+  });
+
+  describe('resolveMemoryTarget (agent-side)', () => {
+    function load() {
+      const ctx = vm.createContext({
+        ptr: (v: string) => ({ value: BigInt(v), isNull: () => BigInt(v) === 0n }),
+        Process: { findModuleByName: () => null, findRangeByAddress: () => null },
+        Module: { findGlobalExportByName: () => null, findExportByName: () => null },
+      });
+      vm.runInContext(RESOLVE_TARGET_SNIPPET + RESOLVE_MEMORY_TARGET_SNIPPET, ctx);
+      return ctx as unknown as { resolveMemoryTarget: (s: unknown) => { value: bigint } | null; resolveTarget: (s: string) => unknown };
+    }
+
+    it('accepts the pre-parsed target object the host sends (options.target = parseTarget(address))', () => {
+      const agent = load();
+      expect(agent.resolveMemoryTarget(parseTarget('0x70abccfbec'))?.value).toBe(0x70abccfbecn);
+      expect(agent.resolveMemoryTarget(parseTarget('0x0'))?.value).toBe(0n);
+      expect(agent.resolveMemoryTarget(parseTarget('libnope.so+0x10'))).toBeNull();
+    });
+
+    it('keeps 0x0 and low absolute addresses as pointers instead of "target not found"', () => {
+      const agent = load();
+      expect(agent.resolveMemoryTarget('0x0')?.value).toBe(0n);
+      expect(agent.resolveMemoryTarget('0x10')?.value).toBe(16n);
+    });
+
+    it('still returns null for unresolvable symbolic targets', () => {
+      expect(load().resolveMemoryTarget('libnope.so+0x10')).toBeNull();
+    });
+
+    it('documents why the bypass exists: plain resolveTarget drops 0x0', () => {
+      expect(load().resolveTarget('0x0')).toBeNull();
     });
   });
 });

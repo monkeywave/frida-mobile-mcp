@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import frida from 'frida';
@@ -22,6 +22,21 @@ export function getSkillPath(name: string): string {
 
 export function readSkill(name: string): string {
   return readFileSync(getSkillPath(name), 'utf8');
+}
+
+/** Resolves skills/<name>/references/<file> by basename only; null unless that exact file exists in the references dir. */
+export function getSkillReferencePath(name: string, file: string): string | null {
+  if (!(SHIPPED_SKILLS as readonly string[]).includes(name)) return null;
+  if (file !== path.basename(file) || file.includes('\\') || !file.endsWith('.md')) return null;
+  const dir = path.join(path.dirname(getSkillPath(name)), 'references');
+  if (!existsSync(dir) || !readdirSync(dir).includes(file)) return null;
+  return path.join(dir, file);
+}
+
+export function readSkillReference(name: string, file: string): string {
+  const resolved = getSkillReferencePath(name, file);
+  if (!resolved) throw new Error(`Unknown reference ${file} for skill ${name}`);
+  return readFileSync(resolved, 'utf8');
 }
 
 function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
@@ -191,6 +206,24 @@ export function registerResources(server: McpServer, deviceManager: DeviceManage
           return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readSkill(skill) }] };
         } catch (err) {
           return { contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Skill ${skill} is not available: ${String(err)}` }] };
+        }
+      }
+    );
+  }
+
+  // Template: frida://skills/<name>/references/{file} - on-demand reference files of a skill (basename only)
+  for (const skill of SHIPPED_SKILLS) {
+    server.registerResource(
+      `frida-skill-${skill}-reference`,
+      new ResourceTemplate(`frida://skills/${skill}/references/{file}`, { list: undefined }),
+      { description: `Reference file of agent skill ${skill} (tools.md, fritap.md); linked from SKILL.md`, mimeType: 'text/markdown' },
+      async (uri, variables) => {
+        const raw = String(variables.file);
+        const file = raw.endsWith('.md') ? raw : `${raw}.md`;
+        try {
+          return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readSkillReference(skill, file) }] };
+        } catch {
+          return { contents: [{ uri: uri.href, mimeType: 'text/plain', text: `Reference ${raw} is not available for skill ${skill}` }] };
         }
       }
     );

@@ -20,6 +20,11 @@ const DEVICE_ID = process.env.FRIDA_MCP_E2E_DEVICE;
 const TARGET = process.env.FRIDA_MCP_E2E_TARGET ?? 'com.example.rc4demo';
 const LIBC = 'libc.so';
 const TEST_TIMEOUT_MS = 60_000;
+/**
+ * resolve_address reports the first export at an address; bionic aliases open (open64, __open*),
+ * so on some devices (Pixel 5) `libc.so!open` resolves back to `open64`.
+ */
+const OPEN_SYMBOL_ALIAS = /^(open|open64|__open\w*)$/;
 
 type Json = Record<string, any>;
 
@@ -72,13 +77,13 @@ describe.skipIf(!DEVICE_ID)('e2e: native analysis tools on a real device', () =>
     expect(bySymbol.module).toBe(LIBC);
     expect(bySymbol.rva).toMatch(/^libc\.so\+0x[0-9a-f]+$/);
     expect(bySymbol.address).toMatch(/^0x[0-9a-f]+$/);
-    expect(bySymbol.symbol).toBe('open');
+    expect(bySymbol.symbol).toMatch(OPEN_SYMBOL_ALIAS);
     expect(bySymbol.kind).toBe('export');
 
     const byOffset = await call('resolve_address', { session_id: sessionId, target: bySymbol.rva });
     expect(byOffset.kind).toBe('offset');
     expect(byOffset.address).toBe(bySymbol.address);
-    expect(byOffset.symbol).toBe('open');
+    expect(byOffset.symbol).toMatch(OPEN_SYMBOL_ALIAS);
 
     const byAbsolute = await call('resolve_address', { session_id: sessionId, target: bySymbol.address });
     expect(byAbsolute.kind).toBe('absolute');

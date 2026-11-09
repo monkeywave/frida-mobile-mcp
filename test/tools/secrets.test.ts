@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { registerSecretsTool } from '../../src/tools/secrets.js';
 import { initState, getState } from '../../src/state.js';
 import { rateLimiter } from '../../src/helpers/rate-limiter.js';
+import { EARLY_RESUME_SESSION_NOTE } from '../../src/helpers/session-helper.js';
 import {
   agentOptions,
   callJson,
@@ -54,6 +55,15 @@ describe('find_secrets_in_memory MCP tool', () => {
     expect(tool).toBeDefined();
     expect(tool!.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
     expect(tool!.outputSchema).toBeDefined();
+  });
+
+  it('notes in limitations when the not-running target was spawned and resumed before the attach', async () => {
+    const first = await callJson(client, 'find_secrets_in_memory', { target: TARGET });
+    expect(first.limitations).toContain(EARLY_RESUME_SESSION_NOTE);
+
+    // A reused session was not started by this call: no note.
+    const again = await callJson(client, 'find_secrets_in_memory', { session_id: first.result.session_id });
+    expect(again.limitations).not.toContain(EARLY_RESUME_SESSION_NOTE);
   });
 
   it('returns the candidates and points read_memory at the top one', async () => {

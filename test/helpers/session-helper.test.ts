@@ -8,7 +8,7 @@ vi.mock('frida', () => ({
 }));
 
 import frida from 'frida';
-import { getOrCreateSession, findRunningPid } from '../../src/helpers/session-helper.js';
+import { getOrCreateSession, findRunningPid, EARLY_RESUME_SESSION_NOTE, sessionResolutionLimitations, attachOptionsForRealm, attachInRealm, spawnAndAttach } from '../../src/helpers/session-helper.js';
 import { initState, getState } from '../../src/state.js';
 import { FridaMcpError } from '../../src/helpers/errors.js';
 import type { SessionEntry } from '../../src/types.js';
@@ -98,7 +98,7 @@ describe('getOrCreateSession', () => {
   });
 
   describe('spawn fallback', () => {
-    it('spawns, attaches and resumes in order when nothing is running', async () => {
+    it('spawns, resumes, then attaches when nothing is running (launch-watchdog safe)', async () => {
       const result = await getOrCreateSession(deviceManager, { target: TARGET });
 
       expect(device.spawn).toHaveBeenCalledTimes(1);
@@ -107,12 +107,48 @@ describe('getOrCreateSession', () => {
       expect(device.resume).toHaveBeenCalledTimes(1);
       expect(device.resume.mock.calls[0][0]).toBe(SPAWNED_PID);
 
-      expect(callOrder(device.spawn)).toBeLessThan(callOrder(device.attach));
-      expect(callOrder(device.attach)).toBeLessThan(callOrder(device.resume));
+      expect(callOrder(device.spawn)).toBeLessThan(callOrder(device.resume));
+      expect(callOrder(device.resume)).toBeLessThan(callOrder(device.attach));
 
       expect(result.isNew).toBe(true);
       expect(result.needsResume).toBe(false);
+      expect(result.resumedBeforeAttach).toBe(true);
       expect(result.sessionEntry.pid).toBe(SPAWNED_PID);
+    });
+
+    it('resumes before the attach on iOS too', async () => {
+      deviceManager.detectPlatform.mockResolvedValue('ios');
+
+      const result = await getOrCreateSession(deviceManager, { target: TARGET });
+
+      expect(callOrder(device.resume)).toBeLessThan(callOrder(device.attach));
+      expect(result.resumedBeforeAttach).toBe(true);
+    });
+
+    it('does not report an early resume when attaching to a running process', async () => {
+      const result = await getOrCreateSession(deviceManager, { target: '1234' });
+
+      expect(device.resume).not.toHaveBeenCalled();
+      expect(result.resumedBeforeAttach).toBe(false);
+    });
+
+    it('still kills the early-resumed process when the attach fails', async () => {
+      device.attach.mockRejectedValue(new Error('unable to find process'));
+
+      await expect(getOrCreateSession(deviceManager, { target: TARGET })).rejects.toMatchObject({ code: 'PROCESS_NOT_FOUND' });
+
+      expect(callOrder(device.resume)).toBeLessThan(callOrder(device.attach));
+      expect(device.kill).toHaveBeenCalledWith(SPAWNED_PID);
+    });
+
+    it('exports a limitation note for the early-resume path', () => {
+      expect(EARLY_RESUME_SESSION_NOTE).toMatch(/resumed before attaching/);
+    });
+
+    it('sessionResolutionLimitations surfaces the note only for an early-resumed session', () => {
+      expect(sessionResolutionLimitations({ resumedBeforeAttach: true })).toEqual([EARLY_RESUME_SESSION_NOTE]);
+      expect(sessionResolutionLimitations({ resumedBeforeAttach: false })).toEqual([]);
+      expect(sessionResolutionLimitations({})).toEqual([]);
     });
 
     it('leaves the spawned process suspended when resume is false', async () => {
@@ -122,6 +158,8 @@ describe('getOrCreateSession', () => {
       expect(device.attach).toHaveBeenCalledTimes(1);
       expect(device.resume).not.toHaveBeenCalled();
       expect(result.needsResume).toBe(true);
+      expect(result.resumedBeforeAttach).toBe(false);
+      expect(callOrder(device.spawn)).toBeLessThan(callOrder(device.attach));
     });
 
     it('forceSpawn spawns without consulting the running app list and leaves it suspended', async () => {
@@ -380,5 +418,101 @@ describe('findRunningPid', () => {
 
     await expect(findRunningPid(device as any, TARGET)).resolves.toBe(555);
     expect(device.enumerateProcesses).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('attach realm (Frida 17.26)', () => {
+  let device: FakeDevice;
+  let deviceManager: any;
+
+  beforeEach(() => {
+    initState({ ...TEST_CONFIG });
+    vi.mocked(frida.Cancellable.withTimeout).mockImplementation(() => ({ isCancelled: false }) as any);
+    device = makeDevice();
+    deviceManager = makeDeviceManager(device);
+  });
+
+  afterEach(() => {
+    getState().stopCleanupTimer();
+    vi.restoreAllMocks();
+  });
+
+  it('attachOptionsForRealm keeps native options empty and sets realm only for emulated', () => {
+    expect(attachOptionsForRealm()).toEqual({});
+    expect(attachOptionsForRealm('native')).toEqual({});
+    expect(attachOptionsForRealm('emulated')).toEqual({ realm: 'emulated' });
+  });
+
+  it('attachInRealm issues a native attach without options and an emulated attach with realm', async () => {
+    await attachInRealm(device as any, 10);
+    await attachInRealm(device as any, 11, 'emulated');
+
+    expect(device.attach.mock.calls[0]).toEqual([10]);
+    expect(device.attach.mock.calls[1]).toEqual([11, { realm: 'emulated' }]);
+  });
+
+  it('spawnAndAttach spawns, attaches in the realm, and kills the spawned pid when the attach fails', async () => {
+    device.spawn = vi.fn().mockResolvedValue(77);
+    const ok = await spawnAndAttach(device as any, 'com.example', { realm: 'emulated' });
+    expect(ok.pid).toBe(77);
+    expect(device.attach.mock.calls.at(-1)).toEqual([77, { realm: 'emulated' }]);
+
+    device.attach.mockRejectedValueOnce(new Error('attach boom'));
+    device.kill = vi.fn().mockResolvedValue(undefined);
+    await expect(spawnAndAttach(device as any, 'com.example')).rejects.toThrow('attach boom');
+    expect(device.kill).toHaveBeenCalledWith(77);
+  });
+
+  it('defaults to the native realm and records it on the session entry', async () => {
+    const { sessionEntry } = await getOrCreateSession(deviceManager, { target: '1234' });
+
+    expect(device.attach.mock.calls[0][1]).toEqual({});
+    expect(sessionEntry.realm).toBe('native');
+  });
+
+  it('passes realm=emulated to device.attach and records it', async () => {
+    const { sessionEntry } = await getOrCreateSession(deviceManager, { target: '1234', realm: 'emulated' });
+
+    expect(device.attach.mock.calls[0][1]).toEqual({ realm: 'emulated' });
+    expect(sessionEntry.realm).toBe('emulated');
+  });
+
+  it('does not reuse a native session by target for an emulated request (and vice versa)', async () => {
+    const state = getState();
+    const native = makeFakeEntry({ target: '1234', pid: 1234, device: device as any });
+    state.addSession(native);
+
+    const emulated = await getOrCreateSession(deviceManager, { target: '1234', realm: 'emulated' });
+    expect(emulated.isNew).toBe(true);
+    expect(emulated.sessionEntry.id).not.toBe(native.id);
+
+    const nativeAgain = await getOrCreateSession(deviceManager, { target: '1234' });
+    expect(nativeAgain.isNew).toBe(false);
+    expect(nativeAgain.sessionEntry.id).toBe(native.id);
+
+    const emulatedAgain = await getOrCreateSession(deviceManager, { target: '1234', realm: 'emulated' });
+    expect(emulatedAgain.isNew).toBe(false);
+    expect(emulatedAgain.sessionEntry.id).toBe(emulated.sessionEntry.id);
+  });
+
+  it('an explicit session_id is reused regardless of realm', async () => {
+    const state = getState();
+    const emulated = makeFakeEntry({ target: 'app', pid: 9, realm: 'emulated', device: device as any });
+    state.addSession(emulated);
+
+    const result = await getOrCreateSession(deviceManager, { target: 'app', sessionId: emulated.id });
+
+    expect(result.isNew).toBe(false);
+    expect(result.sessionEntry.id).toBe(emulated.id);
+  });
+
+  it('findSessionByTarget without a realm still matches any realm (legacy callers)', () => {
+    const state = getState();
+    const emulated = makeFakeEntry({ target: 'app', pid: 9, realm: 'emulated' });
+    state.addSession(emulated);
+
+    expect(state.findSessionByTarget('app')?.id).toBe(emulated.id);
+    expect(state.findSessionByTarget('app', 'native')).toBeUndefined();
+    expect(state.findSessionByTarget('app', 'emulated')?.id).toBe(emulated.id);
   });
 });

@@ -3,7 +3,7 @@
  * e.g. on CI runners without the frida native binding or without the bridge devDependencies.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readdirSync, lstatSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -15,7 +15,10 @@ import {
   getCompilerProjectDir,
   linkPackage,
   needsRefresh,
+  installLocalPackage,
+  patchProjectJavaBridge,
 } from '../../src/agent/compiler.js';
+import { isJavaBridgeThreadDetachSkipped } from '../../src/agent/java-bridge-patch.js';
 import { isFridaCompileBundle } from '../../src/agent/script-factory.js';
 import { ScriptError } from '../../src/helpers/errors.js';
 
@@ -96,6 +99,59 @@ describe('linkPackage / needsRefresh', () => {
   });
 });
 
+describe('Java bridge unload workaround in the compiler project', () => {
+  const packageName = 'frida-java-bridge';
+  const src = path.resolve('node_modules', packageName);
+  let root: string;
+
+  const installedIndex = (): string => path.join(root, 'node_modules', packageName, 'index.js');
+  const originalIndex = (): string => readFileSync(path.join(src, 'index.js'), 'utf8');
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), 'frida-mcp-javapatch-'));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(['linux', 'darwin', 'win32'] as const)('copies (never links) and patches the bridge on %s', (platform) => {
+    installLocalPackage(root, packageName, src, platform);
+    expect(lstatSync(path.join(root, 'node_modules', packageName)).isSymbolicLink()).toBe(false);
+    expect(patchProjectJavaBridge(root)).toBe('patched');
+    expect(isJavaBridgeThreadDetachSkipped(readFileSync(installedIndex(), 'utf8'))).toBe(true);
+    // The shared original in this repo's node_modules stays untouched.
+    expect(isJavaBridgeThreadDetachSkipped(originalIndex())).toBe(false);
+  });
+
+  it('is idempotent across project preparations', () => {
+    installLocalPackage(root, packageName, src, 'linux');
+    patchProjectJavaBridge(root);
+    const patchedOnce = readFileSync(installedIndex(), 'utf8');
+    expect(patchProjectJavaBridge(root)).toBe('already-patched');
+    expect(readFileSync(installedIndex(), 'utf8')).toBe(patchedOnce);
+  });
+
+  it('refuses to patch through a symlink to the shared original', () => {
+    mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+    symlinkSync(src, path.join(root, 'node_modules', packageName), 'junction');
+    expect(patchProjectJavaBridge(root)).toBe('skipped');
+    expect(isJavaBridgeThreadDetachSkipped(originalIndex())).toBe(false);
+  });
+
+  it('flags an upstream index.js without the VM.dispose call', () => {
+    mkdirSync(path.dirname(installedIndex()), { recursive: true });
+    writeFileSync(installedIndex(), 'export default {};\n');
+    expect(patchProjectJavaBridge(root)).toBe('pattern-not-found');
+    expect(readFileSync(installedIndex(), 'utf8')).toBe('export default {};\n');
+  });
+
+  it('still links other bridges', () => {
+    installLocalPackage(root, 'frida-objc-bridge', path.resolve('node_modules', 'frida-objc-bridge'), 'linux');
+    expect(lstatSync(path.join(root, 'node_modules', 'frida-objc-bridge')).isSymbolicLink()).toBe(true);
+  });
+});
+
 describe.skipIf(process.env.FRIDA_MCP_SKIP_COMPILER === '1')('frida Compiler integration', () => {
   let projectDir: string;
   let previousOverride: string | undefined;
@@ -135,6 +191,12 @@ describe.skipIf(process.env.FRIDA_MCP_SKIP_COMPILER === '1')('frida Compiler int
     expect(existsSync(path.join(projectDir, 'package.json'))).toBe(true);
     expect(existsSync(path.join(projectDir, 'node_modules', 'frida-java-bridge', 'package.json'))).toBe(true);
     expect(existsSync(path.join(projectDir, 'node_modules', 'frida-objc-bridge', 'package.json'))).toBe(true);
+    const javaIndex = readFileSync(path.join(projectDir, 'node_modules', 'frida-java-bridge', 'index.js'), 'utf8');
+    expect(isJavaBridgeThreadDetachSkipped(javaIndex)).toBe(true);
+    // The bundled bridge keeps its runtime dispose (hooks get reverted) but no longer detaches the JS thread.
+    expect(bundle).toMatch(/Script\.bindWeak\(runtime\d*,/);
+    // (esbuild drops the comments, leaving an empty nextTick callback.)
+    expect(bundle).toMatch(/Env\w*\.dispose\(env\d*\);\s*\}\);\s*Script\.nextTick\(\(\)\s*=>\s*\{\s*\}\)/);
     // The temp entrypoint is removed after the build.
     expect(readdirSync(path.join(projectDir, 'agents'))).toEqual([]);
   });
@@ -192,5 +254,13 @@ describe.skipIf(process.env.FRIDA_MCP_SKIP_COMPILER === '1')('frida Compiler int
     bundles.forEach((bundle, i) => {
       expect(bundle).toContain(`send(${i + 1});`);
     });
+  });
+});
+
+describe('compiledBundleUsesJavaBridge', () => {
+  it('reads the bundle header module paths', async () => {
+    const { compiledBundleUsesJavaBridge } = await import('../../src/agent/compiler.js');
+    expect(compiledBundleUsesJavaBridge('📦\n3 /node_modules/frida-java-bridge/index.js\n2 /agent.js\n✄\nabc\n✄\nde')).toBe(true);
+    expect(compiledBundleUsesJavaBridge('📦\n2 /agent.js\n✄\nfrida-java-bridge')).toBe(false);
   });
 });

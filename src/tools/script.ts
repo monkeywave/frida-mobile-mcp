@@ -14,7 +14,7 @@ import { rateLimiter } from '../helpers/rate-limiter.js';
 import { getOrCreateSession } from '../helpers/session-helper.js';
 import { responseFormatSchema } from '../constants.js';
 import { createAgentScript, isFridaCompileBundle } from '../agent/script-factory.js';
-import { compileEsmAgent } from '../agent/compiler.js';
+import { compileEsmAgent, compiledBundleUsesJavaBridge } from '../agent/compiler.js';
 import { detectScriptKind, validateScriptSource as runScriptValidation, type ValidateScriptResult } from './validate.js';
 import { attachScriptSinks } from '../helpers/script-sink.js';
 import type { BridgeName } from '../agent/bridges.js';
@@ -259,6 +259,7 @@ export function registerScriptTool(server: McpServer, deviceManager: DeviceManag
           name: scriptName,
           kind: 'user',
           bridges: bridges as BridgeName[] | undefined,
+          usesJavaBridge: prepared.kind === 'classic' ? undefined : compiledBundleUsesJavaBridge(prepared.source),
         });
         const scriptId = state.generateId();
         const messages: Array<Record<string, unknown>> = [];

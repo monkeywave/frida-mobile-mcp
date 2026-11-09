@@ -6,7 +6,7 @@ import { buildResult, formatToolResponse } from '../helpers/result-builder.js';
 import { FridaMcpError, wrapFridaError } from '../helpers/errors.js';
 import { resolveInstrumentationTarget } from './hook.js';
 import { responseFormatSchema } from '../constants.js';
-import { getOrCreateSession } from '../helpers/session-helper.js';
+import { getOrCreateSession, sessionResolutionLimitations } from '../helpers/session-helper.js';
 import { createAgentScript } from '../agent/script-factory.js';
 import type { BridgeName } from '../agent/bridges.js';
 import { RESOLVE_TARGET_SNIPPET } from '../agent/address.js';
@@ -92,11 +92,13 @@ export function registerSecretsTool(server: McpServer, deviceManager: DeviceMana
         rateLimiter.record('memory_read');
 
         const resolved = resolveInstrumentationTarget(target, session_id);
-        const { sessionEntry } = await getOrCreateSession(deviceManager, {
+        const resolution = await getOrCreateSession(deviceManager, {
           target: resolved.target,
           device,
           sessionId: resolved.sessionId,
         });
+        const { sessionEntry } = resolution;
+        const sessionLimitations = sessionResolutionLimitations(resolution);
 
         const selected = recognizers && recognizers.length > 0 ? recognizers : [...ALL_RECOGNIZERS];
         const scopeValue = scope ?? 'heap';
@@ -161,8 +163,8 @@ export function registerSecretsTool(server: McpServer, deviceManager: DeviceMana
                   { tool: 'trigger_and_wait', args: { session_id: sessionEntry.id }, reason: 'Drive the app so the secret gets allocated, then re-scan' },
                 ],
             truncated
-              ? { coverage: { status: 'unknown', note: `stopped early (${result.stopped})` }, limitations: [`Scan stopped early (${result.stopped}); raise max_bytes/limit or narrow scope to a module to scan more.`] }
-              : { coverage: { status: 'complete' } },
+              ? { coverage: { status: 'unknown', note: `stopped early (${result.stopped})` }, limitations: [...sessionLimitations, `Scan stopped early (${result.stopped}); raise max_bytes/limit or narrow scope to a module to scan more.`] }
+              : { coverage: { status: 'complete' }, limitations: sessionLimitations },
           ),
           response_format,
         );
@@ -180,9 +182,10 @@ export function registerSecretsTool(server: McpServer, deviceManager: DeviceMana
  * as the JSON literal __FRIDA_MCP__.options; no value is spliced into code. Uses only the Frida 17
  * instance API (NativePointer#readByteArray, Process.enumerateRanges), never removed statics.
  */
-const SECRET_SCAN_SOURCE =
+export const SECRET_SCAN_SOURCE =
   RESOLVE_TARGET_SNIPPET +
   `
+(function () { // closure scope: the per-byte hot loop reads locals, not global-object properties
   var CHUNK = 1024 * 1024;   // read ranges in 1 MiB slices
   var OVERLAP = 1024;        // re-scan the tail so a structure straddling a chunk boundary isn't missed;
                              // MUST be >= the largest recognized structure (the int32[] RC4 S-box = 1024 bytes),
@@ -202,39 +205,6 @@ const SECRET_SCAN_SOURCE =
     var end = Math.min(off + len, bytes.length);
     for (var i = off; i < end; i++) { var c = bytes[i]; out += (c >= 32 && c < 127) ? String.fromCharCode(c) : '.'; }
     return out;
-  }
-
-  function isRc4Sbox(bytes, off) {
-    if (off + 256 > bytes.length) return false;
-    var seen = new Uint8Array(256);
-    for (var i = 0; i < 256; i++) { var v = bytes[off + i]; if (seen[v]) return false; seen[v] = 1; }
-    return true;
-  }
-  // RC4 S-box stored as a Java int[256] (little-endian int32 values, each 0..255).
-  function isRc4SboxInt32LE(bytes, off) {
-    if (off + 1024 > bytes.length) return false;
-    if (bytes[off + 1] !== 0 || bytes[off + 2] !== 0 || bytes[off + 3] !== 0) return false; // cheap reject before allocating
-    var seen = new Uint8Array(256);
-    for (var i = 0; i < 256; i++) {
-      var p = off + i * 4;
-      if (bytes[p + 1] !== 0 || bytes[p + 2] !== 0 || bytes[p + 3] !== 0) return false;
-      var v = bytes[p];
-      if (seen[v]) return false;
-      seen[v] = 1;
-    }
-    return true;
-  }
-  function shannon(bytes, off, len) {
-    var counts = new Array(256); for (var i = 0; i < 256; i++) counts[i] = 0;
-    for (var j = 0; j < len; j++) counts[bytes[off + j]]++;
-    var e = 0;
-    for (var k = 0; k < 256; k++) { var c = counts[k]; if (!c) continue; var p = c / len; e -= p * (Math.log(p) / Math.LN2); }
-    return e;
-  }
-  function distinctCount(bytes, off, len) {
-    var seen = new Uint8Array(256), n = 0;
-    for (var i = 0; i < len; i++) { var v = bytes[off + i]; if (!seen[v]) { seen[v] = 1; n++; } }
-    return n;
   }
 
   var SBOX = __FRIDA_MCP__.options.aesSbox;
@@ -304,61 +274,351 @@ const SECRET_SCAN_SOURCE =
     }
     return true;
   }
+  // Candidate first bytes are located with the native TypedArray#indexOf (a memchr), not a JS loop.
   function findDerKey(bytes, from) {
-    for (var i = from; i + 7 <= bytes.length; i++) {
-      if (bytes[i] === 0x30 && bytes[i+1] === 0x82 && bytes[i+4] === 0x02 && bytes[i+5] === 0x01 && bytes[i+6] === 0x00) return i;
+    for (var i = bytes.indexOf(0x30, from); i >= 0 && i + 7 <= bytes.length; i = bytes.indexOf(0x30, i + 1)) {
+      if (bytes[i+1] === 0x82 && bytes[i+4] === 0x02 && bytes[i+5] === 0x01 && bytes[i+6] === 0x00) return i;
     }
     return -1;
   }
   var PEM = '-----BEGIN';
   function findPem(bytes, from) {
-    for (var i = from; i + PEM.length <= bytes.length; i++) {
+    for (var i = bytes.indexOf(0x2d, from); i >= 0 && i + PEM.length <= bytes.length; i = bytes.indexOf(0x2d, i + 1)) {
       var ok = true;
       for (var j = 0; j < PEM.length; j++) { if (bytes[i + j] !== PEM.charCodeAt(j)) { ok = false; break; } }
       if (ok) return i;
     }
     return -1;
   }
+  var RC4_HIST = new Uint16Array(256);
+  // ---- Hot path ------------------------------------------------------------------------------
+  // scanChunk visits every byte offset of every chunk, and Frida's QuickJS pays dearly for each
+  // function call and allocation. So the per-offset loop is inlined over the typed array, allocates
+  // nothing, and guards every exact recognizer above with a cheap NECESSARY condition — the exact
+  // check (unchanged) only runs where its guard holds, so results are identical while almost every
+  // offset is rejected in a handful of byte reads.
+  var AES_NKS = [4, 6, 8];
+  var SB1 = new Uint8Array(256);  // SBOX[x] ^ Rcon[1]: top byte of SubWord(RotWord(.)) ^ Rcon at i = nk
+  var XT = new Uint8Array(256);   // xtime(x)
+  var XT3 = new Uint8Array(256);  // xtime(x) ^ x  (multiply by 3)
+  for (var xi = 0; xi < 256; xi++) { SB1[xi] = SBOX[xi] ^ 0x01; XT[xi] = xtime(xi); XT3[xi] = XT[xi] ^ xi; }
+
+  // Byte offset of word i of the reconstructed ENCRYPTION schedule inside a decryption schedule
+  // (the ekWord() mapping of matchesAesDecryptionSchedule) and whether that word is MixColumns'd.
+  function decWordPos(nk, i) { var nr = nk + 6; return (4 * (nr - (i >> 2)) + (i & 3)) * 4; }
+  function decWordMixed(nk, i) { var r = i >> 2; return r !== 0 && r !== nk + 6; }
+  // First-step taps (i = nk): w[nk] == w[0] ^ SubWord(RotWord(w[nk-1])) ^ Rcon. The guard compares
+  // only the TOP byte of each side (rejects 255/256 of offsets); the full recurrence verifies.
+  // Forward: top(w[nk]) at 4nk, top(w[0]) at 0, byte 1 of w[nk-1] at 4(nk-1)+1.
+  // Decryption: w[nk] is always an inner (mixed) word, w[0] never is; w[nk-1] is mixed for nk 6/8.
+  var D4A = decWordPos(4, 4), D4B = decWordPos(4, 0), D4C = decWordPos(4, 3) + 1;
+  var D6A = decWordPos(6, 6), D6B = decWordPos(6, 0), D6C = decWordPos(6, 5);
+  var D8A = decWordPos(8, 8), D8B = decWordPos(8, 0), D8C = decWordPos(8, 7);
+  if (!decWordMixed(4, 4) || decWordMixed(4, 3) || !decWordMixed(6, 5) || !decWordMixed(8, 7) || !decWordMixed(8, 8)) {
+    throw new Error('AES decryption tap layout changed');
+  }
+  var AES_MAX_BYTES = aesScheduleBytes(8); // every nk is in bounds when off + this <= length
+
+  // Exact-check fallbacks for the last <AES_MAX_BYTES> bytes of a chunk (per-nk bounds apply).
+  function aesForwardNkAt(bytes, off, len) {
+    for (var n = 0; n < 3; n++) {
+      var nk = AES_NKS[n];
+      if (off + aesScheduleBytes(nk) <= len && matchesAesSchedule(bytes, off, nk)) return n;
+    }
+    return -1;
+  }
+  function aesDecryptionNkAt(bytes, off, len) {
+    for (var n = 0; n < 3; n++) {
+      var nk = AES_NKS[n];
+      if (off + aesScheduleBytes(nk) <= len && matchesAesDecryptionSchedule(bytes, off, nk)) return n;
+    }
+    return -1;
+  }
+  // Index into AES_NKS of the schedule at off (decryption form adds 3), or -1. Same precedence as
+  // before: encryption AES-128/192/256 first, decryption forms only when no encryption form matches.
+  function aesScheduleAt(bytes, off, len) {
+    if (off + AES_MAX_BYTES > len) {
+      var f = aesForwardNkAt(bytes, off, len);
+      if (f >= 0) return f;
+      var d = aesDecryptionNkAt(bytes, off, len);
+      return d >= 0 ? d + 3 : -1;
+    }
+    var b0 = bytes[off], p, m, c;
+    if ((bytes[off + 16] ^ b0) === SB1[bytes[off + 13]] && matchesAesSchedule(bytes, off, 4)) return 0;
+    if ((bytes[off + 24] ^ b0) === SB1[bytes[off + 21]] && matchesAesSchedule(bytes, off, 6)) return 1;
+    if ((bytes[off + 32] ^ b0) === SB1[bytes[off + 29]] && matchesAesSchedule(bytes, off, 8)) return 2;
+    p = off + D4A; m = XT[bytes[p]] ^ XT3[bytes[p + 1]] ^ bytes[p + 2] ^ bytes[p + 3];
+    if ((m ^ bytes[off + D4B]) === SB1[bytes[off + D4C]] && matchesAesDecryptionSchedule(bytes, off, 4)) return 3;
+    p = off + D6A; m = XT[bytes[p]] ^ XT3[bytes[p + 1]] ^ bytes[p + 2] ^ bytes[p + 3];
+    p = off + D6C; c = bytes[p] ^ XT[bytes[p + 1]] ^ XT3[bytes[p + 2]] ^ bytes[p + 3];
+    if ((m ^ bytes[off + D6B]) === SB1[c] && matchesAesDecryptionSchedule(bytes, off, 6)) return 4;
+    p = off + D8A; m = XT[bytes[p]] ^ XT3[bytes[p + 1]] ^ bytes[p + 2] ^ bytes[p + 3];
+    p = off + D8C; c = bytes[p] ^ XT[bytes[p + 1]] ^ XT3[bytes[p + 2]] ^ bytes[p + 3];
+    if ((m ^ bytes[off + D8B]) === SB1[c] && matchesAesDecryptionSchedule(bytes, off, 8)) return 5;
+    return -1;
+  }
+
+  // Per-chunk guard tables, filled in one pass so each offset's six guards are plain lookups:
+  // T[j] = SB1[b_j]; MT[j] = top byte of MixColumns(word at j); MS[j] = SB1[byte 1 of MixColumns(word at j)].
+  var AES_T = null, AES_MT = null, AES_MS = null;
+  function fillAesGuardTables(bytes) {
+    var len = bytes.length;
+    if (AES_T === null || AES_T.length < len) { AES_T = new Uint8Array(len); AES_MT = new Uint8Array(len); AES_MS = new Uint8Array(len); }
+    var T = AES_T, MT = AES_MT, MS = AES_MS;
+    var a0 = bytes[0], a1 = bytes[1], a2 = bytes[2], a3;
+    for (var j = 0; j + 3 < len; j++) {
+      a3 = bytes[j + 3];
+      T[j] = SB1[a0];
+      MT[j] = XT[a0] ^ XT3[a1] ^ a2 ^ a3;
+      MS[j] = SB1[a0 ^ XT[a1] ^ XT3[a2] ^ a3];
+      a0 = a1; a1 = a2; a2 = a3;
+    }
+    for (; j < len; j++) T[j] = SB1[bytes[j]];
+  }
+
+  var STAMP = new Uint32Array(256); // generation-stamped "seen" set, reused instead of new Uint8Array(256)
+  var stampGen = 0;
+  function nextStamp() {
+    if (++stampGen >= 0xfffffff0) { STAMP.fill(0); stampGen = 1; }
+    return stampGen;
+  }
+  // Same answers as isRc4Sbox / isRc4SboxInt32LE in secret-recognizers.ts, without allocating a seen-array per call.
+  function isRc4SboxFast(bytes, off) {
+    if (off + 256 > bytes.length) return false;
+    var g = nextStamp();
+    for (var i = 0; i < 256; i++) { var v = bytes[off + i]; if (STAMP[v] === g) return false; STAMP[v] = g; }
+    return true;
+  }
+  function isRc4SboxInt32LEFast(bytes, off) {
+    if (off + 1024 > bytes.length) return false;
+    if (bytes[off + 1] !== 0 || bytes[off + 2] !== 0 || bytes[off + 3] !== 0) return false;
+    var g = nextStamp();
+    for (var i = 0; i < 256; i++) {
+      var p = off + i * 4;
+      if (bytes[p + 1] !== 0 || bytes[p + 2] !== 0 || bytes[p + 3] !== 0) return false;
+      var v = bytes[p];
+      if (STAMP[v] === g) return false;
+      STAMP[v] = g;
+    }
+    return true;
+  }
+
+  // Strided entropy windows over an incremental histogram: advancing by ENTROPY_STRIDE removes and
+  // adds STRIDE bytes instead of recounting L; any other jump rebuilds. Shannon is computed from the
+  // same counts in the same 0..255 order as shannonEntropy() in secret-recognizers.ts, so the float
+  // result is bit-identical.
+  var ENT_HIST = new Uint16Array(256);
+  function EntropyWindow(bytes, len) { this.bytes = bytes; this.len = len; this.start = -1; this.distinct = 0; }
+  EntropyWindow.prototype.moveTo = function (off) {
+    var b = this.bytes, L = this.len, i;
+    if (this.start >= 0 && off - this.start === ENTROPY_STRIDE && ENTROPY_STRIDE <= L) {
+      for (i = this.start; i < off; i++) if (--ENT_HIST[b[i]] === 0) this.distinct--;
+      for (i = this.start + L; i < off + L; i++) if (ENT_HIST[b[i]]++ === 0) this.distinct++;
+    } else {
+      ENT_HIST.fill(0);
+      this.distinct = 0;
+      for (i = off; i < off + L; i++) if (ENT_HIST[b[i]]++ === 0) this.distinct++;
+    }
+    this.start = off;
+  };
+  EntropyWindow.prototype.entropy = function () {
+    var e = 0, L = this.len;
+    for (var k = 0; k < 256; k++) { var c = ENT_HIST[k]; if (!c) continue; var p = c / L; e -= p * (Math.log(p) / Math.LN2); }
+    return e;
+  };
+
+  // A JWT match starts at "eyJ" and lies inside one maximal run of base64url/'.' bytes. So instead
+  // of materializing the whole ~1 MiB chunk as a string, each run is turned into a (small) string
+  // from its first "eyJ" onward and fed to the same regex — no match can start earlier in the run,
+  // so matches and their order are unchanged.
+  var JWT_CHAR = new Uint8Array(256);
+  for (var jc = 0; jc < 256; jc++) {
+    JWT_CHAR[jc] = ((jc >= 0x30 && jc <= 0x39) || (jc >= 0x41 && jc <= 0x5a) || (jc >= 0x61 && jc <= 0x7a) || jc === 0x2d || jc === 0x5f || jc === 0x2e) ? 1 : 0;
+  }
+  function latin1(bytes, from, to) {
+    var s = '';
+    for (var i = from; i < to; i += 4096) s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(to, i + 4096)));
+    return s;
+  }
+  // Calls onMatch(index, text) for each regex match in bytes[0, end) in order; stops when it returns true.
+  function forEachJwt(bytes, end, onMatch) {
+    for (var i = bytes.indexOf(0x65); i >= 0 && i + 3 <= end; i = bytes.indexOf(0x65, i + 1)) {
+      if (bytes[i + 1] !== 0x79 || bytes[i + 2] !== 0x4a) continue;
+      var e = i + 3;
+      while (e < end && JWT_CHAR[bytes[e]]) e++;
+      var re = /eyJ[A-Za-z0-9_-]{5,}\\.eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]*/g;
+      var text = latin1(bytes, i, e), mm;
+      while ((mm = re.exec(text)) !== null) { if (onMatch(i + mm.index, mm[0])) return; }
+      i = e - 1; // the run is done; resume after it
+    }
+  }
+
+  // Exact per-offset recognizers in the original order (RC4 byte[], RC4 int32[], AES enc then dec,
+  // ChaCha, Salsa). Only called for offsets a guard flagged. Returns true once the limit is reached.
+  function emitOffsetHits(bytes, off, len, w, push, addr) {
+    if (w.rc4) {
+      if (isRc4SboxFast(bytes, off)) {
+        if (push({ type: 'rc4_sbox', address: addr(off), size: 256, preview_hex: hexSlice(bytes, off, PREVIEW), note: '256-byte permutation of 0..255 (RC4 S-box, byte[])' })) return true;
+      }
+      if (isRc4SboxInt32LEFast(bytes, off)) {
+        if (push({ type: 'rc4_sbox', address: addr(off), size: 1024, preview_hex: hexSlice(bytes, off, PREVIEW), note: 'permutation of 0..255 as int32[] (RC4 S-box, Java int[256])' })) return true;
+      }
+    }
+    if (w.aes) {
+      var an = aesScheduleAt(bytes, off, len);
+      if (an >= 0) {
+        var nk = AES_NKS[an % 3];
+        var kind = an < 3 ? ' encryption key schedule' : ' decryption (equivalent-inverse) key schedule';
+        if (push({ type: 'aes_key_schedule', address: addr(off), size: aesScheduleBytes(nk), preview_hex: hexSlice(bytes, off, PREVIEW), note: 'valid AES-' + (nk * 32) + kind })) return true;
+      }
+    }
+    if (bytes[off] !== 0x65) return false; // both ChaCha constants and the Salsa diagonal start with 'e'
+    if (w.chacha) {
+      var ckl = chachaKeyLenAt(bytes, off);
+      if (ckl !== 0 && off + 16 + ckl <= len) {
+        if (push({ type: 'chacha_key', address: addr(off + 16), size: ckl, preview_hex: hexSlice(bytes, off + 16, ckl), note: 'ChaCha20 ' + (ckl * 8) + '-bit key (after "expand ' + ckl + '-byte k" constant at ' + addr(off) + ')' })) return true;
+      }
+    }
+    if (w.salsa && matchesSalsa20At(bytes, off)) {
+      if (push({ type: 'salsa_key', address: addr(off), size: 64, preview_hex: hexSlice(bytes, off, PREVIEW), note: 'Salsa20 state (sigma constant on the diagonal; 256-bit key in words 1-4 and 11-14)' })) return true;
+    }
+    return false;
+  }
+
+  // JS guard pass (used when the native guard pass is unavailable): flags the offsets in
+  // [0, coreLen) where any per-offset recognizer could match, in ascending order.
+  function forEachCandidateJs(bytes, coreLen, w, visit) {
+    var len = bytes.length;
+    // Sliding 256-byte histogram: [off, off+256) is an RC4 byte S-box exactly when all 256 values
+    // are distinct — O(1) per offset instead of re-checking 256 bytes.
+    var hist = RC4_HIST, distinct = 0, h;
+    if (w.rc4) { hist.fill(0); for (h = 0; h < 256 && h < len; h++) if (hist[bytes[h]]++ === 0) distinct++; }
+    if (w.aes) fillAesGuardTables(bytes);
+    var T = AES_T, MT = AES_MT, MS = AES_MS, aesFastEnd = len - AES_MAX_BYTES, b0, cand;
+    var wantRc4 = w.rc4, wantAes = w.aes, wantCS = w.chacha || w.salsa;
+    for (var off = 0; off < coreLen; off++) {
+      b0 = bytes[off];
+      cand = false;
+      if (wantRc4) {
+        if (distinct === 256 && off + 256 <= len) cand = true;
+        if (--hist[b0] === 0) distinct--;
+        if (off + 256 < len && hist[bytes[off + 256]]++ === 0) distinct++;
+        // int32[256]: the first two LE ints are 0..255 and differ (else not a permutation).
+        if (bytes[off + 3] === 0 && bytes[off + 7] === 0 && b0 !== bytes[off + 4]) cand = true;
+      }
+      // Six first-step guards (enc 128/192/256, dec 128/192/256) as table lookups; near the chunk
+      // end, where bounds differ per nk, every offset goes to the exact check.
+      if (!cand && wantAes && (off > aesFastEnd ||
+          (bytes[off + 16] ^ b0) === T[off + 13] || (bytes[off + 24] ^ b0) === T[off + 21] || (bytes[off + 32] ^ b0) === T[off + 29] ||
+          (MT[off + D4A] ^ bytes[off + D4B]) === T[off + D4C] || (MT[off + D6A] ^ bytes[off + D6B]) === MS[off + D6C] ||
+          (MT[off + D8A] ^ bytes[off + D8B]) === MS[off + D8C])) cand = true;
+      if (!cand && wantCS && b0 === 0x65) cand = true;
+      if (cand && visit(off)) return;
+    }
+  }
+
+  // Native guard pass: a CModule flags candidate offsets ~100x faster than QuickJS runs the per-byte
+  // loop. Its guards are STRONGER than the JS pass (full first AES recurrence word, full int32
+  // header, the 4-byte "expa" constant prefix) but still only necessary conditions — the exact JS
+  // recognizers decide every hit. Falls back to the JS pass when CModule is unavailable or fails.
+  var GUARD_C = [
+    'typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32;',
+    'static u32 be(const u8 *p) { return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3]; }',
+    'static u32 subw(const u8 *sb, u32 w) { return ((u32)sb[w >> 24] << 24) | ((u32)sb[(w >> 16) & 255] << 16) | ((u32)sb[(w >> 8) & 255] << 8) | sb[w & 255]; }',
+    'static u32 mixw(const u8 *xt, u32 w) {',
+    '  u32 a0 = w >> 24, a1 = (w >> 16) & 255, a2 = (w >> 8) & 255, a3 = w & 255;',
+    '  u32 b0 = xt[a0] ^ xt[a1] ^ a1 ^ a2 ^ a3, b1 = a0 ^ xt[a1] ^ xt[a2] ^ a2 ^ a3;',
+    '  u32 b2 = a0 ^ a1 ^ xt[a2] ^ xt[a3] ^ a3, b3 = xt[a0] ^ a0 ^ a1 ^ a2 ^ xt[a3];',
+    '  return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;',
+    '}',
+    '/* First key-expansion step (i = nk): w[nk] == w[0] ^ SubWord(RotWord(w[nk-1])) ^ Rcon[1]. */',
+    'static int first_step(const u8 *sb, u32 wnk, u32 w0, u32 wprev) { return wnk == (w0 ^ subw(sb, (wprev << 8) | (wprev >> 24)) ^ 0x01000000u); }',
+    '/* Each AES guard first compares only the top byte of that step (rejects 255/256), then the full word. */',
+    'static int fwd_guard(const u8 *sb1, const u8 *sb, const u8 *q, u32 nk) {',
+    '  if ((q[4 * nk] ^ q[0]) != sb1[q[4 * nk - 3]]) return 0;',
+    '  return first_step(sb, be(q + 4 * nk), be(q), be(q + 4 * nk - 4));',
+    '}',
+    '/* Decryption form: w[nk] at a (always through MixColumns), w[0] at z (raw), w[nk-1] at c (mixed when cmix). */',
+    'static int dec_guard(const u8 *sb1, const u8 *sb, const u8 *xt, const u8 *xt3, const u8 *q, u32 a, u32 z, u32 c, int cmix) {',
+    '  const u8 *pa = q + a, *pc = q + c;',
+    '  u8 top = xt[pa[0]] ^ xt3[pa[1]] ^ pa[2] ^ pa[3];',
+    '  u8 prev1 = cmix ? (u8)(pc[0] ^ xt[pc[1]] ^ xt3[pc[2]] ^ pc[3]) : pc[1];',
+    '  if ((u8)(top ^ q[z]) != sb1[prev1]) return 0;',
+    '  return first_step(sb, mixw(xt, be(pa)), be(q + z), cmix ? mixw(xt, be(pc)) : be(pc));',
+    '}',
+    'u32 secret_candidates(const u8 *b, u32 len, u32 core, u32 flags, const u8 *tab, const u32 *tap, u32 *out) {',
+    '  const u8 *sb1 = tab, *xt = tab + 256, *xt3 = tab + 512, *sb = tab + 768;',
+    '  u16 hist[256]; u32 distinct = 0, n = 0, i, off;',
+    '  for (i = 0; i < 256; i++) hist[i] = 0;',
+    '  if (flags & 1) for (i = 0; i < 256 && i < len; i++) if (hist[b[i]]++ == 0) distinct++;',
+    '  for (off = 0; off < core; off++) {',
+    '    const u8 *q = b + off; u8 b0 = q[0]; int c = 0;',
+    '    if (flags & 1) {',
+    '      if (distinct == 256 && off + 256 <= len) c = 1;',
+    '      if (--hist[b0] == 0) distinct--;',
+    '      if (off + 256 < len && hist[q[256]]++ == 0) distinct++;',
+    '      if (off + 1024 <= len && (q[1] | q[2] | q[3] | q[5] | q[6] | q[7]) == 0 && b0 != q[4]) c = 1;',
+    '    }',
+    '    if (!c && (flags & 2)) {',
+    '      if (off + tap[9] > len) c = 1;',
+    '      else if (fwd_guard(sb1, sb, q, 4) || fwd_guard(sb1, sb, q, 6) || fwd_guard(sb1, sb, q, 8) ||',
+    '               dec_guard(sb1, sb, xt, xt3, q, tap[0], tap[1], tap[2], 0) ||',
+    '               dec_guard(sb1, sb, xt, xt3, q, tap[3], tap[4], tap[5], 1) ||',
+    '               dec_guard(sb1, sb, xt, xt3, q, tap[6], tap[7], tap[8], 1)) c = 1;',
+    '    }',
+    '    if (!c && (flags & 4) && off + 4 <= len && b0 == 0x65 && q[1] == 0x78 && q[2] == 0x70 && q[3] == 0x61) c = 1;',
+    '    if (c) out[n++] = off;',
+    '  }',
+    '  return n;',
+    '}',
+  ].join('\\n');
+  var NATIVE_GUARDS; // undefined = not tried yet, null = unavailable
+  function nativeGuards() {
+    if (NATIVE_GUARDS !== undefined) return NATIVE_GUARDS;
+    NATIVE_GUARDS = null;
+    if (typeof CModule !== 'function' || typeof NativeFunction !== 'function') return null;
+    try {
+      var cm = new CModule(GUARD_C);
+      var tab = Memory.alloc(1024), tap = Memory.alloc(40);
+      var t = new Uint8Array(1024); t.set(SB1, 0); t.set(XT, 256); t.set(XT3, 512); t.set(SBOX, 768);
+      tab.writeByteArray(t.buffer);
+      // Word (not byte) positions of the decryption taps: w[nk], w[0], w[nk-1] per nk.
+      tap.writeByteArray(new Uint32Array([D4A, D4B, D4C - 1, D6A, D6B, D6C, D8A, D8B, D8C, AES_MAX_BYTES]).buffer);
+      NATIVE_GUARDS = {
+        cm: cm, tab: tab, tap: tap, buf: Memory.alloc(CHUNK), out: Memory.alloc(CHUNK * 4),
+        fn: new NativeFunction(cm.secret_candidates, 'uint32', ['pointer', 'uint32', 'uint32', 'uint32', 'pointer', 'pointer', 'pointer']),
+      };
+    } catch (e) { NATIVE_GUARDS = null; }
+    return NATIVE_GUARDS;
+  }
+  // Candidate offsets from the native pass, or null when it is unavailable for this chunk.
+  function nativeCandidates(bytes, coreLen, w) {
+    var ng = nativeGuards();
+    if (ng === null || bytes.length > CHUNK) return null;
+    try {
+      ng.buf.writeByteArray(bytes.buffer.byteLength === bytes.length ? bytes.buffer : bytes.slice().buffer);
+      var flags = (w.rc4 ? 1 : 0) | (w.aes ? 2 : 0) | (w.chacha || w.salsa ? 4 : 0);
+      var n = ng.fn(ng.buf, bytes.length, coreLen, flags, ng.tab, ng.tap, ng.out);
+      return n === 0 ? new Uint32Array(0) : new Uint32Array(ng.out.readByteArray(n * 4));
+    } catch (e) { NATIVE_GUARDS = null; return null; }
+  }
+
   function scanChunk(bytes, coreLen, base, pos, want, opts, out, limit, counters) {
     function addr(off) { var a = base.add(pos + off); var d = describeAddress(a); return d.rva !== null ? d.rva : a.toString(); }
     function push(c) { out.push(c); return out.length >= limit; }
 
-    // rc4_sbox + aes_key_schedule: slide byte-by-byte (fail-fast), only start offsets within the core
-    var nks = [4, 6, 8];
-    for (var off = 0; off < coreLen && out.length < limit; off++) {
-      if (want.rc4_sbox && isRc4Sbox(bytes, off)) {
-        if (push({ type: 'rc4_sbox', address: addr(off), size: 256, preview_hex: hexSlice(bytes, off, PREVIEW), note: '256-byte permutation of 0..255 (RC4 S-box, byte[])' })) return;
-      }
-      if (want.rc4_sbox && isRc4SboxInt32LE(bytes, off)) {
-        if (push({ type: 'rc4_sbox', address: addr(off), size: 1024, preview_hex: hexSlice(bytes, off, PREVIEW), note: 'permutation of 0..255 as int32[] (RC4 S-box, Java int[256])' })) return;
-      }
-      if (want.aes_key_schedule) {
-        var hitAes = false;
-        for (var n = 0; n < nks.length; n++) {
-          if (matchesAesSchedule(bytes, off, nks[n])) {
-            if (push({ type: 'aes_key_schedule', address: addr(off), size: aesScheduleBytes(nks[n]), preview_hex: hexSlice(bytes, off, PREVIEW), note: 'valid AES-' + (nks[n] * 32) + ' encryption key schedule' })) return;
-            hitAes = true; break;
-          }
-        }
-        if (!hitAes) {
-          for (var dn = 0; dn < nks.length; dn++) {
-            if (matchesAesDecryptionSchedule(bytes, off, nks[dn])) {
-              if (push({ type: 'aes_key_schedule', address: addr(off), size: aesScheduleBytes(nks[dn]), preview_hex: hexSlice(bytes, off, PREVIEW), note: 'valid AES-' + (nks[dn] * 32) + ' decryption (equivalent-inverse) key schedule' })) return;
-              break;
-            }
-          }
-        }
-      }
-      if (want.chacha_key) {
-        var ckl = chachaKeyLenAt(bytes, off);
-        if (ckl !== 0 && off + 16 + ckl <= bytes.length) {
-          if (push({ type: 'chacha_key', address: addr(off + 16), size: ckl, preview_hex: hexSlice(bytes, off + 16, ckl), note: 'ChaCha20 ' + (ckl * 8) + '-bit key (after "expand ' + ckl + '-byte k" constant at ' + addr(off) + ')' })) return;
-        }
-      }
-      if (want.salsa_key && matchesSalsa20At(bytes, off)) {
-        if (push({ type: 'salsa_key', address: addr(off), size: 64, preview_hex: hexSlice(bytes, off, PREVIEW), note: 'Salsa20 state (sigma constant on the diagonal; 256-bit key in words 1-4 and 11-14)' })) return;
-      }
+    // rc4_sbox + aes_key_schedule + chacha/salsa: every start offset within the core is guarded
+    // (native or JS pass); the exact recognizers run only on flagged offsets, in ascending order.
+    var len = bytes.length;
+    var w = { rc4: !!want.rc4_sbox, aes: !!want.aes_key_schedule, chacha: !!want.chacha_key, salsa: !!want.salsa_key };
+    var limitHit = false;
+    function visit(off) { if (out.length >= limit) return true; limitHit = emitOffsetHits(bytes, off, len, w, push, addr); return limitHit; }
+    if ((w.rc4 || w.aes || w.chacha || w.salsa) && out.length < limit) {
+      var cands = nativeCandidates(bytes, coreLen, w);
+      if (cands !== null) { for (var ci = 0; ci < cands.length; ci++) if (visit(cands[ci])) break; }
+      else forEachCandidateJs(bytes, coreLen, w, visit);
     }
+    if (limitHit) return;
     // pem_der: substring scans
     if (want.pem_der) {
       var p = 0;
@@ -376,36 +636,30 @@ const SECRET_SCAN_SOURCE =
         q = der + 1;
       }
     }
-    // jwt: cheap byte pre-scan for the "eyJ" prefix before building the latin-1 string (the vast
-    // majority of heap chunks contain no JWT, so the ~1 MiB string is almost never materialized).
-    if (want.jwt) {
-      var jwtEnd = Math.min(coreLen + OVERLAP, bytes.length);
-      var hasPrefix = false;
-      for (var jp = 0; jp + 3 <= jwtEnd; jp++) {
-        if (bytes[jp] === 0x65 && bytes[jp + 1] === 0x79 && bytes[jp + 2] === 0x4a) { hasPrefix = true; break; }
-      }
-      if (hasPrefix) {
-        var text = '';
-        for (var t = 0; t < jwtEnd; t++) text += String.fromCharCode(bytes[t]);
-        var re = /eyJ[A-Za-z0-9_-]{5,}\\.eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]*/g;
-        var mm;
-        while ((mm = re.exec(text)) !== null && out.length < limit) {
-          if (mm.index >= coreLen) break;
-          if (push({ type: 'jwt', address: addr(mm.index), size: mm[0].length, preview_text: mm[0].slice(0, 160), note: 'JWT token' })) return;
-        }
-      }
+    // jwt: matched per base64url run (see forEachJwt) — the chunk is never turned into one big string.
+    if (want.jwt && out.length < limit) {
+      var stopJwt = false;
+      forEachJwt(bytes, Math.min(coreLen + OVERLAP, len), function (index, text) {
+        if (index >= coreLen || out.length >= limit) return true;
+        stopJwt = push({ type: 'jwt', address: addr(index), size: text.length, preview_text: text.slice(0, 160), note: 'JWT token' });
+        return stopJwt;
+      });
+      if (stopJwt) return;
     }
     // high_entropy_key: strided windows, bounded by its own budget so it cannot crowd out the
     // precise recognizers above or halt the whole scan (the real-heap flooding seen on-device).
     if (want.high_entropy_key && counters.entropyHits < opts.maxEntropyHits) {
       var lens = opts.entropyLens || [16, 24, 32];
+      var entEnd = Math.min(coreLen + OVERLAP, len);
       for (var li = 0; li < lens.length && counters.entropyHits < opts.maxEntropyHits; li++) {
         var L = lens[li];
-        for (var o2 = 0; o2 + L <= Math.min(coreLen + OVERLAP, bytes.length) && counters.entropyHits < opts.maxEntropyHits && out.length < limit; o2 += ENTROPY_STRIDE) {
+        var win = new EntropyWindow(bytes, L);
+        for (var o2 = 0; o2 + L <= entEnd && counters.entropyHits < opts.maxEntropyHits && out.length < limit; o2 += ENTROPY_STRIDE) {
           if (o2 >= coreLen) break;
-          var dc = distinctCount(bytes, o2, L);
+          win.moveTo(o2);
+          var dc = win.distinct;
           if (dc < L * 0.75) continue; // cheap pre-filter before the log-heavy entropy calc
-          var ent = shannon(bytes, o2, L);
+          var ent = win.entropy();
           if (ent >= opts.minEntropy) {
             counters.entropyHits++;
             push({ type: 'high_entropy_key', address: addr(o2), size: L, preview_hex: hexSlice(bytes, o2, L), entropy: Math.round(ent * 100) / 100, distinct: dc, note: L + '-byte high-entropy buffer (candidate key)' });
@@ -463,4 +717,5 @@ const SECRET_SCAN_SOURCE =
     }
     return { candidates: out.slice(0, limit), bytes_scanned: bytesScanned, ranges_scanned: rangesScanned, ranges_unreadable: rangesUnreadable, stopped: stopped };
   };
+})();
 `;
