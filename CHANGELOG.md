@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.1](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.0...v0.7.1) (2026-11-09)
+
+
+### Features
+
+* friTap 2.6.5 (ABI 3, read/write direction fix, new capture_tls options), Frida 17.26.2 (realm, Stalker coverage) and Java-bridge unload safety ([8de1d3c](https://github.com/monkeywave/frida-mobile-mcp/commit/8de1d3cc3eec3866d018b670bbb98bf0ac7962f9))
+
+
+### Tests
+
+* normalise CRLF in skill frontmatter test for Windows CI ([931c946](https://github.com/monkeywave/frida-mobile-mcp/commit/931c9469e709850c35e6d4baadb330fd320693b5))
+
+
+### Miscellaneous
+
+* release 0.7.1 ([17856f7](https://github.com/monkeywave/frida-mobile-mcp/commit/17856f70a1f44ef722ddbbdfcbb0562f17e55edf))
+
 ## [0.7.0](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.0...v0.7.0) (2026-10-24)
 
 
