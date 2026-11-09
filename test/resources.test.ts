@@ -6,6 +6,9 @@ import { getSkillReferencePath, readSkill, readSkillReference } from '../src/res
 const SKILL = 'mobile-dynamic-analysis';
 const skillDir = path.resolve(__dirname, '..', 'skills', SKILL);
 
+// Windows CI checks files out with CRLF; the assertions below are about content, not line endings.
+const readSkillLf = (name: string) => readSkill(name).replace(/\r\n/g, '\n');
+
 describe('skill references', () => {
   it('serves the reference files by basename', () => {
     expect(readSkillReference(SKILL, 'tools.md')).toContain('Frida 17.26');
@@ -21,13 +24,13 @@ describe('skill references', () => {
   });
 
   it('keeps SKILL.md within the Agent Skills size recommendation', () => {
-    const body = readSkill(SKILL).replace(/^---\n[\s\S]*?\n---\n/, '');
+    const body = readSkillLf(SKILL).replace(/^---\n[\s\S]*?\n---\n/, '');
     expect(body.split('\n').length).toBeLessThan(500);
     expect(body.length / 4).toBeLessThan(5000);
   });
 
   it('has valid frontmatter and resolvable relative links', () => {
-    const text = readSkill(SKILL);
+    const text = readSkillLf(SKILL);
     const front = /^---\n([\s\S]*?)\n---/.exec(text)![1];
     expect(/^name: (.+)$/m.exec(front)![1]).toBe(SKILL);
     expect(/^description: (.+)$/m.exec(front)![1].length).toBeLessThan(1024);
