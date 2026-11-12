@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   abiToFridaArch,
   assertSafeToken,
@@ -15,6 +15,32 @@ import {
   type ServerOpContext,
 } from '../../src/tools/advanced/server.js';
 import type { AdbExecDeps, ExecResult } from '../../src/helpers/adb.js';
+import { clearSuStyleCache, detectSuStyle, shellSingleQuote, wrapWithSu } from '../../src/helpers/root-elevation.js';
+
+type Route = (argv: string) => Partial<ExecResult>;
+
+/** The adb shell command of a fake call (argv is `-s <serial> shell <command>`). */
+function shellCommandOf(argv: string): string {
+  return argv.split(' shell ')[1] ?? '';
+}
+
+/** Route that answers the su-style probes like a Magisk device, delegating everything else. */
+function magisk(route: Route): Route {
+  return (argv) => (shellCommandOf(argv) === 'su -v' ? { stdout: '26.1:MAGISK\n' } : route(argv));
+}
+
+/** Route that answers the su-style probes like an emulator with AOSP `su` (uid argument, no `-c`). */
+function legacySu(route: Route): Route {
+  return (argv) => {
+    const command = shellCommandOf(argv);
+    if (command === 'id -u') return { stdout: '2000\n' };
+    if (command === 'su -v') return { stderr: "su: invalid uid/gid '-v'", code: 1 };
+    if (command === 'su 0 id -u') return { stdout: '0\n' };
+    return route(argv);
+  };
+}
+
+beforeEach(() => clearSuStyleCache());
 
 /** Build a fake adb deps whose exec is driven by a matcher over the joined argv. */
 function fakeDeps(route: (argv: string) => Partial<ExecResult>): { deps: AdbExecDeps; calls: string[] } {
@@ -113,7 +139,7 @@ describe('fridaServerStatus', () => {
 
 describe('fridaServerStart', () => {
   it('starts and confirms the server came up', async () => {
-    const { deps, calls } = fakeDeps((argv) => (argv.includes('pgrep') ? { stdout: '555' } : {}));
+    const { deps, calls } = fakeDeps(magisk((argv) => (argv.includes('pgrep') ? { stdout: '555' } : {})));
     const result = await fridaServerStart(
       ctxFor(deps),
       { remotePath: '/data/local/tmp/frida-server', listenAddress: '127.0.0.1', port: 27042, extraArgs: [], useSu: true, processName: 'frida-server' },
@@ -125,7 +151,7 @@ describe('fridaServerStart', () => {
   });
 
   it('throws when the server never appears', async () => {
-    const { deps } = fakeDeps(() => ({ stdout: '' }));
+    const { deps } = fakeDeps(magisk(() => ({ stdout: '' })));
     await expect(
       fridaServerStart(
         ctxFor(deps),
@@ -154,7 +180,7 @@ describe('frida-server --token', () => {
   });
 
   it('spawns with the real token but reports it redacted', async () => {
-    const { deps, calls } = fakeDeps((argv) => (argv.includes('pgrep') ? { stdout: '555' } : {}));
+    const { deps, calls } = fakeDeps(magisk((argv) => (argv.includes('pgrep') ? { stdout: '555' } : {})));
     const result = await fridaServerStart(ctxFor(deps), { ...base, token: 'Tok_123' }, async () => {});
     expect(calls.some((c) => c.includes('--token Tok_123'))).toBe(true);
     expect(result.command).toContain('--token ***');
@@ -178,9 +204,122 @@ describe('fridaServerInstall', () => {
 
 describe('fridaServerStop', () => {
   it('reports stopped when no pids remain', async () => {
-    const { deps } = fakeDeps(() => ({ stdout: '' }));
+    const { deps } = fakeDeps(magisk(() => ({ stdout: '' })));
     const result = await fridaServerStop(ctxFor(deps), { processName: 'frida-server', signal: 'TERM', useSu: true });
     expect(result.stopped).toBe(true);
     expect(result.remaining).toEqual([]);
+  });
+
+  it('waits for a still-exiting server instead of reporting it as remaining', async () => {
+    let pgrepCalls = 0;
+    const { deps } = fakeDeps(magisk((cmd) => {
+      if (!cmd.includes('pgrep')) return { stdout: '' };
+      pgrepCalls += 1;
+      return { stdout: pgrepCalls < 3 ? '4242\n' : '' };
+    }));
+    const sleeps: number[] = [];
+    const result = await fridaServerStop(
+      ctxFor(deps),
+      { processName: 'frida-server', signal: 'TERM', useSu: true },
+      async (ms) => { sleeps.push(ms); },
+    );
+    expect(result).toEqual({ stopped: true, remaining: [] });
+    expect(sleeps.length).toBeGreaterThan(0);
+  });
+
+  it('reports remaining pids when the server outlives the wait', async () => {
+    const { deps } = fakeDeps(magisk((cmd) => {
+      return { stdout: cmd.includes('pgrep') ? '4242\n' : '' };
+    }));
+    const result = await fridaServerStop(
+      ctxFor(deps),
+      { processName: 'frida-server', signal: 'TERM', useSu: true },
+      async () => {},
+    );
+    expect(result).toEqual({ stopped: false, remaining: [4242] });
+  });
+});
+
+describe('root elevation (su style)', () => {
+  const startBase = { remotePath: '/data/local/tmp/frida-server', listenAddress: '127.0.0.1', port: 27042, extraArgs: [], useSu: true, processName: 'frida-server' };
+
+  it('wraps commands for every su style', () => {
+    expect(wrapWithSu('id -u', 'none')).toBe('id -u');
+    expect(wrapWithSu('id -u', 'magisk')).toBe("su -c 'id -u'");
+    expect(wrapWithSu('id -u', 'legacy')).toBe("su 0 sh -c 'id -u'");
+  });
+
+  it('escapes single quotes inside the wrapped command', () => {
+    expect(shellSingleQuote("echo 'hi'")).toBe("'echo '\\''hi'\\'''");
+    expect(wrapWithSu("echo 'a b'", 'magisk')).toBe("su -c 'echo '\\''a b'\\'''");
+    expect(wrapWithSu("echo 'a b'", 'legacy')).toBe("su 0 sh -c 'echo '\\''a b'\\'''");
+  });
+
+  it('detects adbd root as style none without probing su', async () => {
+    const { deps, calls } = fakeDeps((argv) => (shellCommandOf(argv) === 'id -u' ? { stdout: '0\n' } : {}));
+    expect(await detectSuStyle(ctxFor(deps))).toBe('none');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('detects Magisk via su -v', async () => {
+    const { deps } = fakeDeps(magisk((argv) => (shellCommandOf(argv) === 'id -u' ? { stdout: '2000' } : {})));
+    expect(await detectSuStyle(ctxFor(deps))).toBe('magisk');
+  });
+
+  it('detects legacy su 0 when su -v fails', async () => {
+    const { deps, calls } = fakeDeps(legacySu(() => ({})));
+    expect(await detectSuStyle(ctxFor(deps))).toBe('legacy');
+    expect(calls.map(shellCommandOf)).toEqual(['id -u', 'su -v', 'su 0 id -u']);
+  });
+
+  it('returns null when no root path works, tolerating exec errors', async () => {
+    const deps: AdbExecDeps = {
+      which: async () => '/usr/bin/adb',
+      exec: async (_cmd, args) => {
+        if (args.join(' ').endsWith('su -v')) throw new Error('timeout');
+        return { stdout: '2000', stderr: '', code: 0 };
+      },
+    };
+    expect(await detectSuStyle(ctxFor(deps))).toBeNull();
+  });
+
+  it('caches the detected style per serial', async () => {
+    const { deps, calls } = fakeDeps(legacySu(() => ({})));
+    await detectSuStyle(ctxFor(deps));
+    await detectSuStyle(ctxFor(deps));
+    expect(calls).toHaveLength(3);
+    clearSuStyleCache('emulator-5554');
+    await detectSuStyle(ctxFor(deps));
+    expect(calls).toHaveLength(6);
+  });
+
+  it('builds a legacy-su start command', () => {
+    expect(buildStartCommand({ ...startBase, suStyle: 'legacy' })).toBe("su 0 sh -c '/data/local/tmp/frida-server -l 127.0.0.1:27042 -D'");
+    expect(buildStopCommand({ processName: 'fs1', signal: 'TERM', useSu: true, suStyle: 'none' })).toBe('pkill -TERM -f [f]s1');
+  });
+
+  it('starts frida-server via su 0 sh -c on a legacy-su device', async () => {
+    const { deps, calls } = fakeDeps(legacySu((argv) => (argv.includes('pgrep') ? { stdout: '777' } : {})));
+    const result = await fridaServerStart(ctxFor(deps), startBase, async () => {});
+    expect(result.command).toBe("su 0 sh -c '/data/local/tmp/frida-server -l 127.0.0.1:27042 -D'");
+    expect(calls).toContain("-s emulator-5554 shell su 0 sh -c '/data/local/tmp/frida-server -l 127.0.0.1:27042 -D' >/dev/null 2>&1 &");
+  });
+
+  it('stops frida-server without su wrapping when adbd is root', async () => {
+    const { deps, calls } = fakeDeps((argv) => (shellCommandOf(argv) === 'id -u' ? { stdout: '0' } : {}));
+    await fridaServerStop(ctxFor(deps), { processName: 'frida-server', signal: 'TERM', useSu: true });
+    expect(calls).toContain('-s emulator-5554 shell pkill -TERM -f [f]rida-server');
+  });
+
+  it('fails with a clear error on a non-rooted device', async () => {
+    const { deps, calls } = fakeDeps((argv) => (shellCommandOf(argv).startsWith('su') ? { stderr: 'su: not found', code: 127 } : { stdout: '2000' }));
+    await expect(fridaServerStart(ctxFor(deps), startBase, async () => {})).rejects.toThrow(/not appear to be rooted.*adb root/);
+    expect(calls.some((c) => c.includes('-D'))).toBe(false);
+  });
+
+  it('skips detection entirely when useSu is false', async () => {
+    const { deps, calls } = fakeDeps((argv) => (argv.includes('pgrep') ? { stdout: '1' } : {}));
+    await fridaServerStart(ctxFor(deps), { ...startBase, useSu: false }, async () => {});
+    expect(calls.some((c) => c.endsWith('shell id -u') || c.includes('su -v'))).toBe(false);
   });
 });

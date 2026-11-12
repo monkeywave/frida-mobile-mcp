@@ -29,6 +29,7 @@ import {
   type AdbExecDeps,
   type ExecResult,
 } from '../../helpers/adb.js';
+import { detectSuStyle, wrapWithSu, type SuStyle } from '../../helpers/root-elevation.js';
 
 const DEFAULT_REMOTE_PATH = '/data/local/tmp/frida-server';
 const DEFAULT_PROCESS_NAME = 'frida-server';
@@ -36,6 +37,9 @@ const DEFAULT_PORT = 27042;
 const DEFAULT_LISTEN = '127.0.0.1';
 /** frida-server can take a moment to daemonize; give the follow-up status check headroom. */
 const START_SETTLE_MS = 1500;
+/** How long fridaServerStop waits for the signalled process to exit, and how often it checks. */
+const STOP_WAIT_MS = 3000;
+const STOP_POLL_MS = 250;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested without a device)
@@ -91,21 +95,23 @@ export function buildStartCommand(opts: {
   useSu: boolean;
   /** Auth token clients must present (`frida-server --token`). */
   token?: string;
+  /** How to elevate when `useSu` is set; defaults to Magisk-style `su -c`. */
+  suStyle?: SuStyle;
 }): string {
   assertSafeToken(opts.remotePath, 'remote_path');
   assertSafeToken(opts.listenAddress, 'listen_address');
   for (const arg of opts.extraArgs) assertSafeToken(arg, 'extra_args entry');
   const tokenArgs = opts.token ? ['--token', assertSafeShellWord(opts.token, 'token')] : [];
   const argv = [opts.remotePath, '-l', `${opts.listenAddress}:${opts.port}`, '-D', ...tokenArgs, ...opts.extraArgs].join(' ');
-  return opts.useSu ? `su -c '${argv}'` : argv;
+  return opts.useSu ? wrapWithSu(argv, opts.suStyle ?? 'magisk') : argv;
 }
 
 /** Build the device-side command that stops frida-server by name. */
-export function buildStopCommand(opts: { processName: string; signal: string; useSu: boolean }): string {
+export function buildStopCommand(opts: { processName: string; signal: string; useSu: boolean; suStyle?: SuStyle }): string {
   assertSafeToken(opts.processName, 'process_name');
   assertSafeToken(opts.signal, 'signal');
   const kill = `pkill -${opts.signal} -f ${selfExcludingPattern(opts.processName)}`;
-  return opts.useSu ? `su -c '${kill}'` : kill;
+  return opts.useSu ? wrapWithSu(kill, opts.suStyle ?? 'magisk') : kill;
 }
 
 /**
@@ -210,12 +216,26 @@ export async function fridaServerInstall(
   return { remotePath: params.remotePath, pushed: true };
 }
 
+/**
+ * Resolve the su style for a root-requiring command, or undefined when `useSu` is off.
+ * Throws when root was requested but the device offers no way to obtain it.
+ */
+export async function resolveSuStyle(ctx: ServerOpContext, useSu: boolean): Promise<SuStyle | undefined> {
+  if (!useSu) return undefined;
+  const style = await detectSuStyle(ctx);
+  if (!style) {
+    throw new FridaMcpError('FRIDA_ERROR', `adb device "${ctx.serial}" does not appear to be rooted: adbd is not root, Magisk \`su -c\` is unavailable, and legacy \`su 0\` failed. On userdebug/emulator images run \`adb root\` first, or root the device (e.g. Magisk).`);
+  }
+  return style;
+}
+
 export async function fridaServerStart(
   ctx: ServerOpContext,
   params: { remotePath: string; listenAddress: string; port: number; extraArgs: string[]; useSu: boolean; processName: string; token?: string },
   sleep: (ms: number) => Promise<void> = defaultSleep,
 ): Promise<{ started: boolean; pids: number[]; command: string }> {
-  const command = buildStartCommand(params);
+  const suStyle = await resolveSuStyle(ctx, params.useSu);
+  const command = buildStartCommand({ ...params, suStyle });
   // Launch in the background so the blocking daemon does not hold the adb shell open.
   await shell(ctx, `${command} >/dev/null 2>&1 &`, 10_000);
   await sleep(START_SETTLE_MS);
@@ -229,11 +249,26 @@ export async function fridaServerStart(
 export async function fridaServerStop(
   ctx: ServerOpContext,
   params: { processName: string; signal: string; useSu: boolean },
+  sleep: (ms: number) => Promise<void> = defaultSleep,
 ): Promise<{ stopped: boolean; remaining: number[] }> {
-  const command = buildStopCommand(params);
+  const suStyle = await resolveSuStyle(ctx, params.useSu);
+  const command = buildStopCommand({ ...params, suStyle });
   await shell(ctx, command);
-  const remaining = await findServerPids(ctx, params.processName);
+  const remaining = await waitForServerExit(ctx, params.processName, sleep);
   return { stopped: remaining.length === 0, remaining };
+}
+
+/**
+ * frida-server needs a moment to shut down after the signal, so poll until its PIDs are gone
+ * (or STOP_WAIT_MS passes) instead of reporting a still-exiting process as "remaining".
+ */
+async function waitForServerExit(ctx: ServerOpContext, processName: string, sleep: (ms: number) => Promise<void>): Promise<number[]> {
+  let remaining = await findServerPids(ctx, processName);
+  for (let waited = 0; remaining.length > 0 && waited < STOP_WAIT_MS; waited += STOP_POLL_MS) {
+    await sleep(STOP_POLL_MS);
+    remaining = await findServerPids(ctx, processName);
+  }
+  return remaining;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -314,7 +349,7 @@ export function registerFridaServerTools(server: McpServer, deps: AdbExecDeps = 
         process_name: z.string().default(DEFAULT_PROCESS_NAME).describe('Process name to confirm after start (match the binary name for renamed servers).'),
         listen_address: z.string().default(DEFAULT_LISTEN).describe('Address to bind. 127.0.0.1 keeps it off the network; 0.0.0.0 exposes it.'),
         port: z.number().int().default(DEFAULT_PORT).describe('Port to listen on (use a non-default port to evade :27042 scans).'),
-        use_su: z.boolean().default(true).describe('Launch via `su -c` (needed on production-rooted devices; set false on userdebug/emulator adb-root).'),
+        use_su: z.boolean().default(true).describe('Launch as root; auto-detects adbd-root / Magisk `su -c` / legacy `su 0` (emulators). Set false to run as the adb shell user.'),
         extra_args: z.array(z.string()).default([]).describe('Additional frida-server CLI arguments.'),
         token: z.string().optional().describe('Require this auth token from clients (frida-server --token). Recommended with listen_address 0.0.0.0; connect with select_device token / FRIDA_MCP_REMOTE_TOKEN. Redacted in the result.'),
         response_format: responseFormatSchema,
@@ -351,7 +386,7 @@ export function registerFridaServerTools(server: McpServer, deps: AdbExecDeps = 
         device: deviceParam,
         process_name: z.string().default(DEFAULT_PROCESS_NAME).describe('Process name to stop.'),
         signal: z.string().default('TERM').describe('Signal to send (e.g. TERM, KILL).'),
-        use_su: z.boolean().default(true).describe('Send the signal via `su -c`.'),
+        use_su: z.boolean().default(true).describe('Send the signal as root; auto-detects adbd-root / Magisk `su -c` / legacy `su 0` (emulators).'),
         response_format: responseFormatSchema,
       }),
       outputSchema: toolOutputSchema(),
