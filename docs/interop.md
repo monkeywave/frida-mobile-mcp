@@ -6,7 +6,8 @@ answers "what does the code say", the dynamic side answers "what does the
 code do at runtime". This document describes the shared conventions that make
 the hand-off between them mechanical: client configuration, the address
 notation contract, the evidence and error envelope, the friTap-backed
-`capture_tls` tool, and a full static -> dynamic -> static walkthrough.
+`capture_tls` tool, a full static -> dynamic -> static walkthrough, and how
+to embed the tools in a broader Frida MCP server.
 
 ## 1. Three-server client configuration
 
@@ -339,3 +340,90 @@ servers) see [rea.md section 7](rea.md#7-walkthrough-apk---static---hook---repor
 5. Report: cite the `evidence_id` of each hook result and the
    `limitations`/`coverage` fields so a reviewer can tell which claims are
    backed by runtime observation and which remain static inference.
+
+## 6. Embedding in a broader Frida MCP server
+
+A host MCP server that covers every Frida target (desktop processes too) can
+reuse this package as a library instead of running it side by side, and pick
+the tool groups it needs.
+
+### 6.1 Tool groups
+
+| Group    | Targets                       | Tools |
+|----------|-------------------------------|-------|
+| `core`   | any Frida target (Linux, macOS, Windows, Android, iOS) | devices/processes/sessions (`list_devices`, `select_device`, `spawn_process`, `attach_process`, ...), modules (`enumerate_modules`, `enumerate_exports`, ...), memory (`read_memory`, `write_memory`, `scan_memory`, ...), native hooks (`hook_function`, `resolve_address`, `analyze_native_function`, ...), `hook_method` / `trace_method` / `trace_coverage` incl. native targets, scripts (`execute_script`, `save_script`, ...), evidence (`get_evidence`, `export_evidence_bundle`), `inject_library` |
+| `mobile` | Android / iOS only            | `get_app_info`, `run_prebuilt_script`, `drive_coverage`, `bypass_ssl_pinning`, `mobile_action`, `detect_app_technologies`, `search_recipes`, `frida_server_status`, `frida_server_install`, `frida_server_start`, `frida_server_stop`, `adb_shell`, `adb_logcat`, `adb_pull`, `adb_push`, `adb_forward` |
+| `fritap` | any target friTap supports    | `capture_tls` |
+
+Borderline `core` tools: `describe_class` needs a Java or Objective-C
+runtime (Android, iOS, macOS); `explore_app` returns only the module list on
+desktop targets.
+
+### 6.2 Minimal host
+
+```ts
+import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { ensureState, loadConfig, registerFridaTools } from 'frida-mobile-mcp';
+
+const config = loadConfig(); // optional overrides: loadConfig({ toolsExclude: [...] })
+ensureState(config); // one Frida state per process
+
+const server = new McpServer({ name: 'my-frida-mcp', version: '1.0.0' });
+const deviceManager = registerFridaTools(server, {
+  config,
+  groups: ['core', 'mobile', 'fritap'], // drop 'mobile' for a desktop-only host
+});
+
+// The host's own desktop tools (your code), sharing the same DeviceManager and state.
+registerDesktopTools(server, deviceManager);
+
+await server.connect(new StdioServerTransport());
+```
+
+`createStdioTransport()` (exported) returns the same `StdioServerTransport`;
+`startHttpServer` / `createSessionServer` cover streamable HTTP.
+
+### 6.3 Shared state
+
+The Frida state (devices, sessions, scripts, hooks, message buffers) is a
+process-wide singleton: `ensureState` creates it once and `getState()` returns
+it. Host tools should resolve devices through the `DeviceManager` returned by
+`registerFridaTools` and look up sessions with `getState()`
+(`getSession(id)`, `findSessionByTarget(target)`, `sessions`) rather than
+building a second session layer. Sessions opened by the Frida tools are then
+visible to host tools, and a host session registered with
+`getState().addSession(entry)` shows up in `list_sessions`, `get_messages` and
+`stop_instrumentation`.
+
+### 6.4 Targeting the host machine
+
+Device resolution order is explicit device id, explicit type,
+`FRIDA_DEVICE_ID`, then the first USB device, then the local device. With a
+phone attached, an unqualified call therefore lands on the phone. To target
+the host machine:
+
+- `select_device({ type: "local" })` once (sets the selected device that
+  later `spawn_process` / `attach_process` calls use), or
+- pass `device: "local"` (the local device id) to tools taking a device id
+  (`select_device` names it `device_id`), or
+- in host code, `deviceManager.resolve({ type: 'local' })`.
+
+### 6.5 One frida native addon
+
+Depend on a `frida` range compatible with this package (`^17`, currently
+`^17.26.2`) so npm dedupes it to one copy. Mismatched versions install two
+native addons with separate device managers and sessions, which the shared
+state cannot see across.
+
+### 6.6 Tool name collisions
+
+`toolNamesInGroups(groups?)` returns the tool names a group selection would
+register (before profile/exclude filtering, no device needed). Compare it
+against the host's own names and drop overlaps with `toolsExclude` globs in
+the config passed to `registerFridaTools` (for example
+`toolsExclude: ['list_devices', 'adb_*']`, or `FRIDA_MCP_TOOLS_EXCLUDE`).
+
+### 6.7 Runtime requirements
+
+Node.js >= 22.12, ESM only (`"type": "module"`; no CommonJS build).

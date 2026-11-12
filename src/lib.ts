@@ -13,6 +13,7 @@ import { getPackageVersion } from './helpers/version.js';
 import { DeviceManager } from './device/manager.js';
 import { registerAllTools, type RegisterAllOptions } from './tools/register-all.js';
 import { getScriptRegistry } from './scripts/registry.js';
+import { registerToolGroups, type ToolGroup } from './tools/groups.js';
 import type { ScriptTemplate } from './types.js';
 
 export { createServer } from './server.js';
@@ -29,6 +30,7 @@ export {
 } from './config.js';
 export type { RuntimeConfig, SchemaProfile, ToolProfile } from './config.js';
 export { CORE_TOOLS, gateServer, isToolExposed, globToRegExp, type ToolPolicy } from './tools/tool-gate.js';
+export { TOOL_GROUPS, ALL_TOOL_GROUPS, registerToolGroups, type ToolGroup } from './tools/groups.js';
 export { DeviceManager, platformFromSystemParameters } from './device/manager.js';
 export { resolveDevice, deviceToInfo, deviceToDetailedInfo } from './device/resolver.js';
 export { getScriptRegistry } from './scripts/registry.js';
@@ -88,6 +90,8 @@ export interface RegisterFridaToolsOptions {
   prompts?: boolean;
   /** Optional decorator applied to every registered tool handler. */
   wrapHandler?: RegisterAllOptions['wrapHandler'];
+  /** Tool groups to register (default: all groups, see `ALL_TOOL_GROUPS`). */
+  groups?: ToolGroup[];
 }
 
 /** Server identity shared by `createServer` and per-session HTTP servers. */
@@ -141,6 +145,7 @@ export function registerFridaTools(server: McpServer, options: RegisterFridaTool
     toolsExclude: options.config?.toolsExclude,
     schemaProfile: options.config?.schemaProfile,
     wrapHandler: options.wrapHandler,
+    groups: options.groups,
   });
 
 
@@ -159,4 +164,16 @@ export function createSessionServer(options: RegisterFridaToolsOptions = {}): Mc
   const server = new McpServer({ ...SERVER_INFO }, SERVER_CAPABILITIES);
   registerFridaTools(server, options);
   return server;
+}
+
+/**
+ * The MCP tool names a group selection registers (default: all groups), before the
+ * tool profile / exclude policy is applied. Runs the registrars against a recording stub;
+ * registration has no side effects, so no device or state is needed.
+ */
+export function toolNamesInGroups(groups?: readonly ToolGroup[]): string[] {
+  const names: string[] = [];
+  const recorder = { registerTool: (name: string) => { names.push(name); } };
+  registerToolGroups(recorder as unknown as McpServer, {} as DeviceManager, groups);
+  return names;
 }

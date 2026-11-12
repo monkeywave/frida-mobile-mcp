@@ -49,6 +49,7 @@ import { getActiveConfig, type SchemaProfile, type ToolProfile } from '../config
 import { TOOL_EFFECTS } from './effects.js';
 import { getState } from '../state.js';
 import { gateServer, policyFromConfig, type ToolPolicy } from './tool-gate.js';
+import { registerToolGroups, type ToolGroup } from './groups.js';
 
 export interface RegisterAllOptions {
   /** Also register the `frida://` resources (default: true). */
@@ -68,6 +69,8 @@ export interface RegisterAllOptions {
    * (default: true; the store itself is enabled by `initEvidenceStore`).
    */
   evidence?: boolean;
+  /** Tool groups to register (default: all groups, see `ALL_TOOL_GROUPS`). */
+  groups?: ToolGroup[];
 }
 
 /** Tier 1: high-level, task-oriented tools. */
@@ -154,8 +157,7 @@ export function registerAllTools(server: McpServer, deviceManager: DeviceManager
   const policy = buildToolPolicy(options);
   const gated = gateServer(server, policy);
   recordAppliedExposure(policy);
-  registerTier1Tools(gated, deviceManager);
-  registerTier2Tools(gated, deviceManager);
+  registerToolGroups(gated, deviceManager, options.groups);
   if (options.resources !== false) registerResources(server, deviceManager);
   if (options.prompts !== false) registerPrompts(server);
 }
