@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.2...v0.7.3) (2026-11-12)
+
+
+### Bug Fixes
+
+* use MCPB prompt argument format in manifest.json so the .mcpb bundle builds ([12e28f7](https://github.com/monkeywave/frida-mobile-mcp/commit/12e28f764c1e736507285580c9fbe5e276ed03a0))
+
 ## [0.7.2](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.1...v0.7.2) (2026-11-12)
 
 
