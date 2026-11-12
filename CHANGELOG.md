@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.2](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.1...v0.7.2) (2026-11-12)
+
+
+### Features
+
+* selectable tool groups (core/mobile/fritap) for embedding in other MCP servers ([38e8a94](https://github.com/monkeywave/frida-mobile-mcp/commit/38e8a94422eb87c43107d7e6c35512427e8e444f))
+
+
+### Bug Fixes
+
+* detect adbd-root/Magisk/legacy su for frida-server start/stop and wait for server exit ([3884278](https://github.com/monkeywave/frida-mobile-mcp/commit/3884278c35c520ced29e62fc6e1b6d3a6db56ad6))
+
 ## [0.7.1](https://github.com/monkeywave/frida-mobile-mcp/compare/v0.7.0...v0.7.1) (2026-11-09)
 
 
