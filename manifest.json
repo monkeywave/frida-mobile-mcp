@@ -382,123 +382,59 @@
       "name": "explore_app",
       "description": "Systematic mobile app exploration workflow: discover, map, interact, instrument, and document.",
       "arguments": [
-        {
-          "name": "package_name",
-          "description": "App bundle ID",
-          "required": true
-        },
-        {
-          "name": "platform",
-          "description": "android or ios",
-          "required": false
-        }
+        "package_name",
+        "platform"
       ],
-      "text": "Explore the app ${package_name} step by step and document what you find."
+      "text": "Explore the app ${arguments.package_name} step by step and document what you find."
     },
     {
       "name": "security_audit",
       "description": "Comprehensive mobile app security assessment: transport, storage, crypto, detection bypass, and reporting.",
       "arguments": [
-        {
-          "name": "package_name",
-          "description": "App bundle ID",
-          "required": true
-        },
-        {
-          "name": "platform",
-          "description": "android or ios",
-          "required": false
-        },
-        {
-          "name": "focus_areas",
-          "description": "Comma-separated: transport,storage,crypto,root_detection",
-          "required": false
-        }
+        "package_name",
+        "platform",
+        "focus_areas"
       ],
-      "text": "Run a security audit of ${package_name} and report findings."
+      "text": "Run a security audit of ${arguments.package_name} and report findings."
     },
     {
       "name": "trace_functionality",
       "description": "Reverse engineering workflow: trace how a specific feature is implemented in a mobile app.",
       "arguments": [
-        {
-          "name": "package_name",
-          "description": "App bundle ID",
-          "required": true
-        },
-        {
-          "name": "functionality",
-          "description": "Feature to trace (e.g. login, payment, encryption)",
-          "required": true
-        }
+        "package_name",
+        "functionality"
       ],
-      "text": "Trace how ${functionality} is implemented in ${package_name}."
+      "text": "Trace how ${arguments.functionality} is implemented in ${arguments.package_name}."
     },
     {
       "name": "write_frida_script",
       "description": "Author, validate and save/export a working Frida script for a concrete goal using the discovery, hook, drive, verify, deliver loop.",
       "arguments": [
-        {
-          "name": "package_name",
-          "description": "App bundle ID",
-          "required": true
-        },
-        {
-          "name": "goal",
-          "description": "What the script must achieve in one line",
-          "required": true
-        },
-        {
-          "name": "platform",
-          "description": "android or ios",
-          "required": false
-        }
+        "package_name",
+        "goal",
+        "platform"
       ],
-      "text": "Write and validate a Frida script for ${package_name} that achieves: ${goal}."
+      "text": "Write and validate a Frida script for ${arguments.package_name} that achieves: ${arguments.goal}."
     },
     {
       "name": "hunt_secrets",
       "description": "Autonomous key-hunting workflow: arm wide-net crypto and coverage hooks, drive the UI to the crypto path, and recover the key as a reusable pattern.",
       "arguments": [
-        {
-          "name": "package_name",
-          "description": "App bundle ID",
-          "required": true
-        },
-        {
-          "name": "secret_kind",
-          "description": "What you are after (e.g. RC4 key, AES key, API token); defaults to any symmetric key",
-          "required": false
-        },
-        {
-          "name": "platform",
-          "description": "android or ios",
-          "required": false
-        }
+        "package_name",
+        "secret_kind",
+        "platform"
       ],
-      "text": "Hunt for secrets in ${package_name} and recover them as reusable patterns."
+      "text": "Hunt for secrets in ${arguments.package_name} and recover them as reusable patterns."
     },
     {
       "name": "tls_traffic_audit",
       "description": "friTap-backed TLS traffic audit: capture keys and decrypted plaintext with capture_tls, attribute traffic to SDKs, review per-library stats, optionally hand off to fritap mcp.",
       "arguments": [
-        {
-          "name": "target",
-          "description": "App bundle ID, process name or PID",
-          "required": true
-        },
-        {
-          "name": "device",
-          "description": "Device ID (defaults to the selected device)",
-          "required": false
-        },
-        {
-          "name": "protocols",
-          "description": "Comma-separated friTap protocols: tls, rc4, auto, all (default tls)",
-          "required": false
-        }
+        "target",
+        "device",
+        "protocols"
       ],
-      "text": "Audit the TLS traffic of ${target} with capture_tls and report findings."
+      "text": "Audit the TLS traffic of ${arguments.target} with capture_tls and report findings."
     }
   ]
 }

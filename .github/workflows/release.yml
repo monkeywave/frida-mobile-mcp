@@ -63,12 +63,17 @@ jobs:
 
       - run: npm test
 
+      # Validate the MCPB manifest before anything is published, so a manifest error cannot
+      # leave a release half-done (on npm but without the .mcpb asset and MCP-registry entry).
+      - name: Validate MCPB manifest
+        run: npx --yes @anthropic-ai/mcpb@2.1.2 validate manifest.json
+
       - run: npm publish --provenance --access public
 
       # Build the MCPB bundle (.mcpb) from manifest.json and attach it to the GitHub release
       # so it can be installed in one click by MCPB-aware clients.
       - name: Build MCPB bundle
-        run: npx --yes @anthropic-ai/mcpb pack . frida-mobile-mcp.mcpb
+        run: npx --yes @anthropic-ai/mcpb@2.1.2 pack . frida-mobile-mcp.mcpb
 
       - name: Attach MCPB bundle to the GitHub release
         env:

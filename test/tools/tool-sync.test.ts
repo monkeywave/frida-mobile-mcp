@@ -101,4 +101,18 @@ describe('tool-list sync', () => {
     const listed = new Set(manifest.prompts.map((p) => p.name));
     expect(prompts.filter((n) => !listed.has(n)), 'prompts missing from manifest.json').toEqual([]);
   });
+
+  // The MCPB manifest schema (unlike MCP's prompts/list) wants argument *names* only and
+  // `${arguments.<name>}` placeholders; anything else makes `mcpb pack` fail at release time.
+  it('manifest.json prompts use the MCPB argument format', () => {
+    const manifest = JSON.parse(read('manifest.json')) as { prompts: { name: string; arguments?: unknown[]; text: string }[] };
+    for (const prompt of manifest.prompts) {
+      const args = prompt.arguments ?? [];
+      expect(args.every((a) => typeof a === 'string'), `${prompt.name}: arguments must be strings`).toBe(true);
+      const placeholders = [...prompt.text.matchAll(/\$\{([^}]+)\}/g)].map((m) => m[1]);
+      for (const placeholder of placeholders) {
+        expect(args.map((a) => `arguments.${a}`), `${prompt.name}: unknown placeholder \${${placeholder}}`).toContain(placeholder);
+      }
+    }
+  });
 });
